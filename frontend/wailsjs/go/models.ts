@@ -137,6 +137,93 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class AlertRule {
+	    id: number;
+	    robotId: number;
+	    filterPolicyId: number;
+	    outputTemplateId: number;
+	    outputFormat: string;
+	    isActive: boolean;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new AlertRule(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.robotId = source["robotId"];
+	        this.filterPolicyId = source["filterPolicyId"];
+	        this.outputTemplateId = source["outputTemplateId"];
+	        this.outputFormat = source["outputFormat"];
+	        this.isActive = source["isActive"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AlertTraceInfo {
+	    robotId: number;
+	    robotName: string;
+	    platform: string;
+	    status: string;
+	    errorMsg?: string;
+	    // Go type: time
+	    sentAt?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new AlertTraceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.robotId = source["robotId"];
+	        this.robotName = source["robotName"];
+	        this.platform = source["platform"];
+	        this.status = source["status"];
+	        this.errorMsg = source["errorMsg"];
+	        this.sentAt = this.convertValues(source["sentAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Device {
 	    id: number;
 	    name: string;
@@ -232,10 +319,25 @@ export namespace main {
 	export class DingTalkRobot {
 	    id: number;
 	    name: string;
+	    platform: string;
 	    webhookUrl: string;
 	    secret: string;
 	    description: string;
 	    isActive: boolean;
+	    feishuWebhookUrl: string;
+	    feishuSecret: string;
+	    weworkWebhookUrl: string;
+	    weworkKey: string;
+	    smtpHost: string;
+	    smtpPort: number;
+	    smtpUsername: string;
+	    smtpPassword: string;
+	    smtpFrom: string;
+	    smtpTo: string;
+	    syslogHost: string;
+	    syslogPort: number;
+	    syslogProtocol: string;
+	    syslogFormat: string;
 	    // Go type: time
 	    createdAt: any;
 	    // Go type: time
@@ -249,10 +351,25 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.platform = source["platform"];
 	        this.webhookUrl = source["webhookUrl"];
 	        this.secret = source["secret"];
 	        this.description = source["description"];
 	        this.isActive = source["isActive"];
+	        this.feishuWebhookUrl = source["feishuWebhookUrl"];
+	        this.feishuSecret = source["feishuSecret"];
+	        this.weworkWebhookUrl = source["weworkWebhookUrl"];
+	        this.weworkKey = source["weworkKey"];
+	        this.smtpHost = source["smtpHost"];
+	        this.smtpPort = source["smtpPort"];
+	        this.smtpUsername = source["smtpUsername"];
+	        this.smtpPassword = source["smtpPassword"];
+	        this.smtpFrom = source["smtpFrom"];
+	        this.smtpTo = source["smtpTo"];
+	        this.syslogHost = source["syslogHost"];
+	        this.syslogPort = source["syslogPort"];
+	        this.syslogProtocol = source["syslogProtocol"];
+	        this.syslogFormat = source["syslogFormat"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }
@@ -301,6 +418,82 @@ export namespace main {
 	        this.isActive = source["isActive"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FieldStatsRequest {
+	    filterPolicyId: number;
+	    startTime: string;
+	    endTime: string;
+	    field: string;
+	    topN: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FieldStatsRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filterPolicyId = source["filterPolicyId"];
+	        this.startTime = source["startTime"];
+	        this.endTime = source["endTime"];
+	        this.field = source["field"];
+	        this.topN = source["topN"];
+	    }
+	}
+	export class StatsItem {
+	    value: string;
+	    location: string;
+	    count: number;
+	    percent: string;
+	    lastSeen: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.location = source["location"];
+	        this.count = source["count"];
+	        this.percent = source["percent"];
+	        this.lastSeen = source["lastSeen"];
+	    }
+	}
+	export class FieldStatsResult {
+	    field: string;
+	    totalLogs: number;
+	    uniqueCount: number;
+	    items: StatsItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FieldStatsResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.totalLogs = source["totalLogs"];
+	        this.uniqueCount = source["uniqueCount"];
+	        this.items = this.convertValues(source["items"], StatsItem);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -382,6 +575,24 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class ImportResult {
+	    success: boolean;
+	    message: string;
+	    count: number;
+	    errors: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.count = source["count"];
+	        this.errors = source["errors"];
+	    }
 	}
 	export class LogQueryParams {
 	    page: number;
@@ -503,9 +714,73 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class LogTraceInfo {
+	    logId: number;
+	    // Go type: time
+	    receivedAt: any;
+	    sourceIp: string;
+	    rawMessage: string;
+	    receiveStatus: string;
+	    receiveError?: string;
+	    parseStatus: string;
+	    parseTemplate?: string;
+	    parsedData?: string;
+	    parseError?: string;
+	    filterStatus: string;
+	    filterEnabled: boolean;
+	    matchedPolicy?: string;
+	    filterConditions?: string;
+	    filterResult?: string;
+	    alertStatus: string;
+	    alertRecords?: AlertTraceInfo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LogTraceInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.logId = source["logId"];
+	        this.receivedAt = this.convertValues(source["receivedAt"], null);
+	        this.sourceIp = source["sourceIp"];
+	        this.rawMessage = source["rawMessage"];
+	        this.receiveStatus = source["receiveStatus"];
+	        this.receiveError = source["receiveError"];
+	        this.parseStatus = source["parseStatus"];
+	        this.parseTemplate = source["parseTemplate"];
+	        this.parsedData = source["parsedData"];
+	        this.parseError = source["parseError"];
+	        this.filterStatus = source["filterStatus"];
+	        this.filterEnabled = source["filterEnabled"];
+	        this.matchedPolicy = source["matchedPolicy"];
+	        this.filterConditions = source["filterConditions"];
+	        this.filterResult = source["filterResult"];
+	        this.alertStatus = source["alertStatus"];
+	        this.alertRecords = this.convertValues(source["alertRecords"], AlertTraceInfo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class OutputTemplate {
 	    id: number;
 	    name: string;
+	    platform: string;
 	    description: string;
 	    content: string;
 	    fields: string;
@@ -524,6 +799,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.platform = source["platform"];
 	        this.description = source["description"];
 	        this.content = source["content"];
 	        this.fields = source["fields"];
@@ -677,6 +953,21 @@ export namespace main {
 	        this.sampleLog = source["sampleLog"];
 	    }
 	}
+	export class StatsField {
+	    name: string;
+	    displayName: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StatsField(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.displayName = source["displayName"];
+	    }
+	}
+	
 	
 	export class SystemConfig {
 	    id: number;
@@ -694,6 +985,7 @@ export namespace main {
 	    theme: string;
 	    language: string;
 	    dataDir: string;
+	    configDir: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SystemConfig(source);
@@ -716,6 +1008,7 @@ export namespace main {
 	        this.theme = source["theme"];
 	        this.language = source["language"];
 	        this.dataDir = source["dataDir"];
+	        this.configDir = source["configDir"];
 	    }
 	}
 	export class SystemStats {

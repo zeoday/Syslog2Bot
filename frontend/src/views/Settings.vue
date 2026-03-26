@@ -3,19 +3,22 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { GetConfig, SaveConfig, CleanupLogs } from '../../wailsjs/go/main/App'
 import { SystemConfig } from '../../wailsjs/go/models'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 const loading = ref(false)
 const saving = ref(false)
 const config = ref<Partial<SystemConfig>>({
   listenPort: 5140,
   protocol: 'udp',
-  logRetention: 7,
+  logRetention: 3,
   maxLogSize: 524288000,
   autoStart: false,
   minimizeToTray: true,
   alertEnabled: true,
   alertInterval: 60,
-  unmatchedLogRetention: 7,
+  unmatchedLogRetention: 3,
   unmatchedLogAlert: true,
   defaultFilterAction: 'keep',
   theme: 'dark',
@@ -29,7 +32,12 @@ onMounted(() => {
 async function loadConfig() {
   loading.value = true
   try {
-    const result = await GetConfig()
+    let result
+    if (isWeb) {
+      result = await WebAPI.GetSystemConfig()
+    } else {
+      result = await GetConfig()
+    }
     config.value = result
   } catch (e) {
     console.error(e)
@@ -41,10 +49,14 @@ async function loadConfig() {
 async function handleSave() {
   saving.value = true
   try {
-    await SaveConfig(config.value as SystemConfig)
+    if (isWeb) {
+      await WebAPI.SaveSystemConfig(config.value)
+    } else {
+      await SaveConfig(config.value as any)
+    }
     ElMessage.success('保存成功')
-  } catch (e: any) {
-    ElMessage.error('保存失败: ' + (e.message || e))
+  } catch (e) {
+    ElMessage.error('保存失败')
   } finally {
     saving.value = false
   }
@@ -52,7 +64,11 @@ async function handleSave() {
 
 async function handleCleanup() {
   try {
-    await CleanupLogs(config.value.logRetention || 30)
+    if (isWeb) {
+      await WebAPI.CleanupLogs(config.value.logRetention || 30)
+    } else {
+      await CleanupLogs(config.value.logRetention || 30)
+    }
     ElMessage.success('清理完成')
   } catch (e) {
     ElMessage.error('清理失败')
@@ -117,14 +133,7 @@ function formatSize(bytes: number): string {
         </el-form-item>
         
         <el-divider content-position="left">界面设置</el-divider>
-        
-        <el-form-item label="主题">
-          <el-radio-group v-model="config.theme">
-            <el-radio value="dark">深色</el-radio>
-            <el-radio value="light">浅色</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        
+
         <el-form-item label="语言">
           <el-select v-model="config.language" style="width: 150px">
             <el-option label="简体中文" value="zh-CN" />
@@ -134,10 +143,18 @@ function formatSize(bytes: number): string {
         
         <el-divider content-position="left">其他设置</el-divider>
         
-        <el-form-item label="数据库位置">
+        <el-form-item label="数据库文件">
           <div class="data-dir-display">
-            <el-tooltip :content="config.dataDir" placement="top">
-              <span class="data-dir-path">{{ config.dataDir }}</span>
+            <el-tooltip :content="config.dataDir + '/syslog.db'" placement="top">
+              <span class="data-dir-path">{{ config.dataDir }}/syslog.db</span>
+            </el-tooltip>
+          </div>
+        </el-form-item>
+        
+        <el-form-item label="配置文件">
+          <div class="data-dir-display">
+            <el-tooltip :content="config.configDir" placement="top">
+              <span class="data-dir-path">{{ config.configDir }}</span>
             </el-tooltip>
           </div>
         </el-form-item>
@@ -162,9 +179,9 @@ function formatSize(bytes: number): string {
       </template>
       <div class="about-content">
         <h3>Syslog2Bot</h3>
-        <p>版本: 1.3.2</p>
-        <p>功能: Syslog日志接收、解析过滤、钉钉告警推送、测试工具</p>
-        <p>技术栈: Go + Wails + Vue3 + Element Plus + SQLite</p>
+        <p>版本: 1.5.0</p>
+        <p>功能: Syslog日志接收、解析过滤、钉钉/飞书/企微/邮箱告警推送、Debug追踪、测试工具</p>
+        <p>技术栈: Go + Wails v2 + Vue3 + TypeScript + Element Plus + SQLite</p>
       </div>
     </el-card>
   </div>

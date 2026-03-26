@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "description": "Syslog2Bot 内置筛选策略",
+  "policies": [
+    {
+      "name": "云锁高危告警",
+      "description": "筛选云锁高危及以上级别的告警",
+      "parseTemplateName": "云锁-告警模板",
+      "conditions": "[{\"field\":\"levelDesc\",\"operator\":\"in\",\"value\":\"高,危急,严重\"}]",
+      "conditionLogic": "AND",
+      "action": "keep",
+      "priority": 100,
+      "isActive": true,
+      "dedupEnabled": true,
+      "dedupWindow": 300,
+      "dropUnmatched": false
+    },
+    {
+      "name": "天眼高危告警",
+      "description": "筛选天眼高危及以上级别的告警",
+      "parseTemplateName": "天眼-组合解析",
+      "conditions": "[{\"field\":\"severity\",\"operator\":\"in\",\"value\":\"高危,危急\"}]",
+      "conditionLogic": "AND",
+      "action": "keep",
+      "priority": 100,
+      "isActive": true,
+      "dedupEnabled": true,
+      "dedupWindow": 300,
+      "dropUnmatched": false
+    }
+  ]
+}

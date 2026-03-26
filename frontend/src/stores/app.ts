@@ -7,6 +7,9 @@ import {
   GetConfig,
   GetSystemStats
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 export interface SystemStats {
   totalLogs: number
@@ -44,10 +47,16 @@ export const useAppStore = defineStore('app', () => {
 
   async function initApp() {
     try {
-      const config = await GetConfig()
-      listenPort.value = config.listenPort
-      protocol.value = config.protocol || 'udp'
-      
+      if (isWeb) {
+        const config = await WebAPI.GetSystemConfig()
+        listenPort.value = config.listenPort || 5140
+        protocol.value = config.protocol || 'udp'
+      } else {
+        const config = await GetConfig()
+        listenPort.value = config.listenPort
+        protocol.value = config.protocol || 'udp'
+      }
+
       await refreshStats()
     } catch (error) {
       console.error('Failed to init app:', error)
@@ -56,7 +65,17 @@ export const useAppStore = defineStore('app', () => {
 
   async function refreshStats() {
     try {
-      const dashboardStats = await GetDashboardStats()
+      let dashboardStats
+      let sysStats
+
+      if (isWeb) {
+        dashboardStats = await WebAPI.GetServiceStatus()
+        sysStats = await WebAPI.GetSystemStats()
+      } else {
+        dashboardStats = await GetDashboardStats()
+        sysStats = await GetSystemStats()
+      }
+
       stats.value = {
         totalLogs: dashboardStats.totalLogs || 0,
         deviceCount: dashboardStats.deviceCount || 0,
@@ -65,12 +84,11 @@ export const useAppStore = defineStore('app', () => {
         startTime: '',
         memoryUsage: 0,
         cpuUsage: 0,
-        connections: 0,
-        receiveRate: 0
+        connections: dashboardStats.connections || 0,
+        receiveRate: dashboardStats.receiveRate || 0
       }
       serviceRunning.value = dashboardStats.serviceRunning || false
-      
-      const sysStats = await GetSystemStats()
+
       stats.value.memoryUsage = sysStats.memoryUsage || 0
       stats.value.cpuUsage = sysStats.cpuUsage || 0
       stats.value.connections = sysStats.connections || 0
@@ -83,7 +101,11 @@ export const useAppStore = defineStore('app', () => {
   async function startService(port: number, proto: string) {
     loading.value = true
     try {
-      await StartSyslogService(port, proto)
+      if (isWeb) {
+        await WebAPI.StartService(port, proto)
+      } else {
+        await StartSyslogService(port, proto)
+      }
       serviceRunning.value = true
       listenPort.value = port
       protocol.value = proto
@@ -99,7 +121,11 @@ export const useAppStore = defineStore('app', () => {
   async function stopService() {
     loading.value = true
     try {
-      await StopSyslogService()
+      if (isWeb) {
+        await WebAPI.StopService()
+      } else {
+        await StopSyslogService()
+      }
       serviceRunning.value = false
       await refreshStats()
     } catch (error) {

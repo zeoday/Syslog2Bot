@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "description": "Syslog2Bot 内置解析模板",
+  "templates": [
+    {
+      "name": "云锁-告警模板",
+      "description": "解析云锁安全设备的syslog告警日志",
+      "parseType": "syslog_json",
+      "headerRegex": "<(?P<priority>\\d+)>(?P<timestamp>\\w+ \\d+ [\\d:]+) (?P<hostname>\\S+)[^{]*",
+      "fieldMapping": "{\"alertTime\":\"告警时间\",\"description\":\"事件描述\",\"levelDesc\":\"威胁等级\",\"threatType\":\"威胁类型\",\"attackIp\":\"攻击IP\",\"innerIp\":\"受害IP\",\"machine.nickname\":\"系统名称\",\"threatSource\":\"威胁来源\",\"groupName\":\"分组名称\",\"action.text\":\"告警详情\",\"result\":\"防护状态\",\"dealStatus\":\"处理状态\"}",
+      "valueTransform": "{\"result\":{\"0\":\"拦截\",\"1\":\"未拦截\"},\"dealStatus\":{\"0\":\"未处理\",\"1\":\"已处理（自动）\",\"2\":\"已处理（手动）\",\"3\":\"误报\",\"4\":\"不关注\",\"5\":\"处置失败\",\"6\":\"处置中\"}}",
+      "deviceType": "云锁",
+      "isActive": true
+    },
+    {
+      "name": "天眼-组合解析",
+      "description": "解析天眼安全设备的告警日志，支持webids_alert、ips_alert和ioc_alert",
+      "parseType": "smart_delimiter",
+      "headerRegex": "",
+      "fieldMapping": "{\"delimiter\":\"|!\",\"typeField\":0,\"skipHeader\":true,\"headerRegex\":\"\",\"subTemplates\":{\"webids_alert\":{\"alertNameField\":3,\"attackIPField\":6,\"victimIPField\":8,\"alertTimeField\":4,\"severityField\":10,\"attackResultField\":26},\"ips_alert\":{\"alertNameField\":3,\"attackIPField\":6,\"victimIPField\":8,\"alertTimeField\":4,\"severityField\":10,\"attackResultField\":24},\"ioc_alert\":{\"alertNameField\":18,\"attackIPField\":6,\"victimIPField\":8,\"alertTimeField\":10,\"severityField\":12,\"attackResultField\":-1}}}",
+      "valueTransform": "{\"severity\":{\"2\":\"低危\",\"4\":\"中危\",\"6\":\"高危\",\"8\":\"危急\"},\"attackResult\":{\"0\":\"失败\",\"1\":\"成功\",\"2\":\"失陷\",\"3\":\"失败\"}}",
+      "deviceType": "天眼",
+      "isActive": true
+    }
+  ]
+}

@@ -29,6 +29,8 @@ type SyslogService struct {
 	lastTime     time.Time
 	lastRate     float64
 	connCount    int
+	traceMap     map[uint]*LogTraceInfo
+	traceMu      sync.RWMutex
 }
 
 type SyslogMessage struct {
@@ -44,6 +46,7 @@ func NewSyslogService(app *App) *SyslogService {
 		logChan:    make(chan SyslogMessage, 1000),
 		stopChan:   make(chan struct{}),
 		alertCache: make(map[string]time.Time),
+		traceMap:   make(map[uint]*LogTraceInfo),
 	}
 }
 
@@ -260,6 +263,8 @@ func (s *SyslogService) handleMessage(msg SyslogMessage) {
 
 	priority, facility, severity := parsePriority(msg.Message)
 
+	isForwarded := s.checkForwardedMark(msg.Message)
+
 	syslogLog := &SyslogLog{
 		DeviceID:     deviceID,
 		DeviceName:   deviceName,
@@ -276,14 +281,25 @@ func (s *SyslogService) handleMessage(msg SyslogMessage) {
 
 	CreateLog(syslogLog)
 	s.incrementReceiveCount()
+	s.createTrace(syslogLog.ID, msg.SourceIP, msg.Message)
 
 	s.app.UpdateStats(GetLogCount(), int(GetDeviceCount()), true)
 
 	config := GetSystemConfig()
-	stdlog.Printf("[DEBUG] AlertEnabled: %v, LogID: %d", config.AlertEnabled, syslogLog.ID)
-	if config.AlertEnabled {
+	stdlog.Printf("[DEBUG] AlertEnabled: %v, LogID: %d, IsForwarded: %v", config.AlertEnabled, syslogLog.ID, isForwarded)
+	if config.AlertEnabled && !isForwarded {
 		s.processLogWithPolicies(syslogLog, device)
 	}
+}
+
+func (s *SyslogService) checkForwardedMark(msg string) bool {
+	if strings.Contains(msg, `"forwarded":true`) {
+		return true
+	}
+	if strings.Contains(msg, "[FORWARDED]") {
+		return true
+	}
+	return false
 }
 
 func parsePriority(msg string) (int, int, int) {
@@ -313,8 +329,11 @@ func (s *SyslogService) processLogWithPolicies(syslogLog *SyslogLog, device *Dev
 
 	var matchedPolicy *FilterPolicy
 	var parsedData map[string]interface{}
+	var hasActivePolicy bool
+	var hasAnyPolicy bool
 
 	for i := range policies {
+		hasAnyPolicy = true
 		policy := &policies[i]
 		stdlog.Printf("[DEBUG] Checking policy: ID=%d, Name=%s, IsActive=%v, DeviceID=%d, DeviceGroupID=%d, ParseTemplateID=%d",
 			policy.ID, policy.Name, policy.IsActive, policy.DeviceID, policy.DeviceGroupID, policy.ParseTemplateID)
@@ -323,6 +342,8 @@ func (s *SyslogService) processLogWithPolicies(syslogLog *SyslogLog, device *Dev
 			stdlog.Printf("[DEBUG] Policy %s is not active, skipping", policy.Name)
 			continue
 		}
+
+		hasActivePolicy = true
 
 		if policy.DeviceID > 0 && (device == nil || policy.DeviceID != device.ID) {
 			stdlog.Printf("[DEBUG] Policy %s DeviceID mismatch, skipping", policy.Name)
@@ -335,10 +356,12 @@ func (s *SyslogService) processLogWithPolicies(syslogLog *SyslogLog, device *Dev
 		}
 
 		var parser *LogParser
+		var templateName string
 		if policy.ParseTemplateID > 0 {
 			template, err := GetParseTemplateByID(policy.ParseTemplateID)
 			if err == nil {
 				parser, _ = NewLogParser(template)
+				templateName = template.Name
 				stdlog.Printf("[DEBUG] Created parser for template: %s, type: %s", template.Name, template.ParseType)
 			} else {
 				stdlog.Printf("[DEBUG] Failed to get parse template: %v", err)
@@ -352,12 +375,15 @@ func (s *SyslogService) processLogWithPolicies(syslogLog *SyslogLog, device *Dev
 			data, err = parser.Parse(syslogLog.RawMessage)
 			if err != nil {
 				stdlog.Printf("[DEBUG] Parse failed: %v", err)
+				s.updateTraceParse(syslogLog.ID, "failed", templateName, "", err.Error())
 				continue
 			}
 			stdlog.Printf("[DEBUG] Parsed data: %+v", data)
+			s.updateTraceParse(syslogLog.ID, "success", templateName, fmt.Sprintf("%+v", data), "")
 		} else {
 			data = s.parseSyslogToMap(syslogLog.RawMessage)
 			stdlog.Printf("[DEBUG] Using syslog map: %+v", data)
+			s.updateTraceParse(syslogLog.ID, "success", "syslog", fmt.Sprintf("%+v", data), "")
 		}
 
 		stdlog.Printf("[DEBUG] Checking conditions: %s", policy.Conditions)
@@ -386,14 +412,26 @@ func (s *SyslogService) processLogWithPolicies(syslogLog *SyslogLog, device *Dev
 			UpdateLogParsedFields(syslogLog.ID, syslogLog.ParsedData, syslogLog.ParsedFields)
 		}
 
+		s.updateTraceFilter(syslogLog.ID, "matched", true, matchedPolicy.Name, matchedPolicy.Conditions, "keep")
+
 		if matchedPolicy.Action == "keep" {
+			s.updateTraceAlert(syslogLog.ID, "pending")
 			s.sendAlertWithPolicy(syslogLog, device, matchedPolicy, parsedData)
 		} else if matchedPolicy.Action == "discard" {
+			s.updateTraceFilter(syslogLog.ID, "matched", true, matchedPolicy.Name, matchedPolicy.Conditions, "discard")
 			DeleteLog(syslogLog.ID)
 		}
 	} else {
 		syslogLog.FilterStatus = "unmatched"
 		UpdateLogFilterStatus(syslogLog.ID, "unmatched", 0)
+
+		if !hasAnyPolicy || !hasActivePolicy {
+			stdlog.Printf("[DEBUG] No active policy found")
+			s.updateTraceFilter(syslogLog.ID, "disabled", false, "", "", "no active policy")
+		} else {
+			stdlog.Printf("[DEBUG] No policy matched")
+			s.updateTraceFilter(syslogLog.ID, "unmatched", true, "", "", "no policy matched")
+		}
 	}
 }
 
@@ -517,62 +555,115 @@ func regexpMatch(pattern, str string) (bool, error) {
 }
 
 func (s *SyslogService) sendAlertWithPolicy(log *SyslogLog, device *Device, filterPolicy *FilterPolicy, parsedData map[string]interface{}) {
-	alertPolicies := GetAlertPoliciesByFilterPolicyID(filterPolicy.ID)
+	stdlog.Printf("[DEBUG] sendAlertWithPolicy called - LogID: %d, FilterPolicyID: %d, FilterPolicyName: %s", log.ID, filterPolicy.ID, filterPolicy.Name)
+	
+	rules := GetAlertRulesByFilterPolicyID(filterPolicy.ID)
+	stdlog.Printf("[DEBUG] Found %d alert rules for filter policy %d", len(rules), filterPolicy.ID)
 
-	for _, alertPolicy := range alertPolicies {
-		if !alertPolicy.IsActive {
-			continue
-		}
-
-		robot, err := GetRobotByID(alertPolicy.RobotID)
+	for _, rule := range rules {
+		robot, err := GetRobotByID(rule.RobotID)
 		if err != nil {
+			stdlog.Printf("[DEBUG] Robot not found for rule %d: %v", rule.ID, err)
+			continue
+		}
+		
+		stdlog.Printf("[DEBUG] Processing robot: %s (ID: %d, Platform: %s)", robot.Name, robot.ID, robot.Platform)
+		
+		if !robot.IsActive || !rule.IsActive {
+			stdlog.Printf("[DEBUG] Robot %s or rule is not active, skipping", robot.Name)
 			continue
 		}
 
-		if !robot.IsActive {
-			continue
+		platform := robot.Platform
+		if platform == "" {
+			platform = "dingtalk"
 		}
 
 		alertKey := s.generateAlertKey(log, filterPolicy, parsedData)
 		if filterPolicy.DedupEnabled && s.isDuplicateAlert(alertKey, filterPolicy.DedupWindow) {
+			stdlog.Printf("[DEBUG] Duplicate alert for robot %s, skipping", robot.Name)
 			continue
 		}
 
-		var outputTemplate *OutputTemplate
-		if alertPolicy.OutputTemplateID > 0 {
-			outputTemplate, _ = GetOutputTemplateByID(alertPolicy.OutputTemplateID)
-		}
-
 		var message string
+		var outputTemplate *OutputTemplate
+		
+		if rule.OutputTemplateID > 0 {
+			outputTemplate, _ = GetOutputTemplateByID(rule.OutputTemplateID)
+		}
+		
+		if outputTemplate == nil || outputTemplate.Platform != platform {
+			outputTemplate, _ = GetOutputTemplateByPlatform(platform)
+		}
+		
 		if outputTemplate != nil {
 			message = s.renderOutputTemplate(outputTemplate, parsedData, device, log)
+			stdlog.Printf("[DEBUG] Using template %s (platform: %s) for robot %s", outputTemplate.Name, outputTemplate.Platform, robot.Name)
 		} else {
 			message = s.defaultAlertMessage(log, device)
+			stdlog.Printf("[DEBUG] No template found for platform %s, using default", platform)
 		}
 
-		err = SendDingTalkMessage(robot.WebhookURL, robot.Secret, message)
+		stdlog.Printf("[DEBUG] Sending to platform: %s", platform)
+
+		var sendErr error
+		switch platform {
+		case "dingtalk":
+			sendErr = SendDingTalkMessage(robot.WebhookURL, robot.Secret, message)
+		case "feishu":
+			stdlog.Printf("[DEBUG] Sending to Feishu - WebhookURL: %s", robot.FeishuWebhookURL)
+			sendErr = SendFeishuMessage(robot.FeishuWebhookURL, robot.FeishuSecret, message)
+		case "wework":
+			sendErr = SendWeworkMessage(robot.WeworkWebhookURL, robot.WeworkKey, message)
+		case "email":
+			sendErr = SendEmailMessage(robot.SMTPHost, robot.SMTPPort, robot.SMTPUsername, robot.SMTPPassword, robot.SMTPFrom, robot.SMTPTo, "【Syslog告警】安全告警通知", message)
+		case "syslog":
+			outputFormat := rule.OutputFormat
+			if outputFormat == "" {
+				outputFormat = robot.SyslogFormat
+			}
+			sendErr = SendSyslogForward(robot.SyslogHost, robot.SyslogPort, robot.SyslogProtocol, outputFormat, message, parsedData, log)
+		default:
+			sendErr = SendDingTalkMessage(robot.WebhookURL, robot.Secret, message)
+		}
 
 		record := &AlertRecord{
-			LogID:         log.ID,
-			RobotID:       robot.ID,
-			AlertPolicyID: alertPolicy.ID,
-			DeviceName:    log.DeviceName,
-			Message:       message,
-			SentAt:        time.Now(),
+			LogID:      log.ID,
+			RobotID:    robot.ID,
+			DeviceName: log.DeviceName,
+			Message:    message,
+			SentAt:     time.Now(),
 		}
 
-		if err != nil {
+		if sendErr != nil {
 			record.Status = "failed"
-			record.ErrorMsg = err.Error()
+			record.ErrorMsg = sendErr.Error()
 			log.AlertStatus = "failed"
+			stdlog.Printf("[DEBUG] Failed to send to %s: %v", robot.Name, sendErr)
 		} else {
 			record.Status = "sent"
 			log.AlertStatus = "sent"
 			s.markAlertSent(alertKey)
+			stdlog.Printf("[DEBUG] Successfully sent to %s", robot.Name)
 		}
 
 		CreateAlertRecord(record)
-		UpdateLogAlertStatus(log.ID, log.AlertStatus, alertPolicy.ID)
+		UpdateLogAlertStatus(log.ID, log.AlertStatus, 0)
+
+		alertRecord := AlertTraceInfo{
+			RobotID:   robot.ID,
+			RobotName: robot.Name,
+			Platform:  platform,
+			Status:    record.Status,
+			ErrorMsg: record.ErrorMsg,
+			SentAt:   record.SentAt,
+		}
+		s.addTraceAlertRecord(log.ID, alertRecord)
+		if record.Status == "sent" {
+			s.updateTraceAlert(log.ID, "sent")
+		} else {
+			s.updateTraceAlert(log.ID, "failed")
+		}
 	}
 }
 
@@ -721,6 +812,12 @@ func (s *SyslogService) GetPort() int {
 	return s.port
 }
 
+func (s *SyslogService) GetReceiveCount() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.receiveCount
+}
+
 func (s *SyslogService) GetReceiveRate() float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -758,4 +855,122 @@ func (s *SyslogService) incrementReceiveCount() {
 	s.mu.Lock()
 	s.receiveCount++
 	s.mu.Unlock()
+}
+
+func (s *SyslogService) GetTraceInfo(logID uint) *LogTraceInfo {
+	s.traceMu.RLock()
+	if trace, ok := s.traceMap[logID]; ok {
+		s.traceMu.RUnlock()
+		return trace
+	}
+	s.traceMu.RUnlock()
+
+	var log SyslogLog
+	if err := GetDB().First(&log, logID).Error; err != nil {
+		return nil
+	}
+
+	trace := &LogTraceInfo{
+		LogID:         log.ID,
+		ReceivedAt:    log.ReceivedAt,
+		SourceIP:      log.SourceIP,
+		RawMessage:    log.RawMessage,
+		ReceiveStatus: "success",
+		ParseStatus:   "success",
+		ParsedData:    log.ParsedData,
+		FilterStatus:  log.FilterStatus,
+		AlertStatus:   log.AlertStatus,
+	}
+
+	if log.MatchedPolicyID > 0 {
+		var policy FilterPolicy
+		if err := GetDB().First(&policy, log.MatchedPolicyID).Error; err == nil {
+			trace.MatchedPolicy = policy.Name
+			trace.FilterEnabled = true
+		}
+	}
+
+	var alertRecords []AlertRecord
+	GetDB().Where("log_id = ?", logID).Find(&alertRecords)
+	for _, record := range alertRecords {
+		var robot DingTalkRobot
+		robotName := ""
+		platform := ""
+		if err := GetDB().First(&robot, record.RobotID).Error; err == nil {
+			robotName = robot.Name
+			platform = robot.Platform
+		}
+		trace.AlertRecords = append(trace.AlertRecords, AlertTraceInfo{
+			RobotID:   record.RobotID,
+			RobotName: robotName,
+			Platform:  platform,
+			Status:    record.Status,
+			ErrorMsg:  record.ErrorMsg,
+			SentAt:    record.SentAt,
+		})
+	}
+
+	return trace
+}
+
+func (s *SyslogService) createTrace(logID uint, sourceIP, rawMessage string) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	s.traceMap[logID] = &LogTraceInfo{
+		LogID:         logID,
+		ReceivedAt:    time.Now(),
+		SourceIP:      sourceIP,
+		RawMessage:    rawMessage,
+		ReceiveStatus: "success",
+	}
+}
+
+func (s *SyslogService) updateTraceParse(logID uint, status, templateName, parsedData, parseError string) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if trace, ok := s.traceMap[logID]; ok {
+		trace.ParseStatus = status
+		trace.ParseTemplate = templateName
+		trace.ParsedData = parsedData
+		trace.ParseError = parseError
+	}
+}
+
+func (s *SyslogService) updateTraceFilter(logID uint, status string, filterEnabled bool, matchedPolicy, filterConditions, filterResult string) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if trace, ok := s.traceMap[logID]; ok {
+		trace.FilterStatus = status
+		trace.FilterEnabled = filterEnabled
+		trace.MatchedPolicy = matchedPolicy
+		trace.FilterConditions = filterConditions
+		trace.FilterResult = filterResult
+	}
+}
+
+func (s *SyslogService) updateTraceAlert(logID uint, status string) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if trace, ok := s.traceMap[logID]; ok {
+		trace.AlertStatus = status
+	}
+}
+
+func (s *SyslogService) addTraceAlertRecord(logID uint, record AlertTraceInfo) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if trace, ok := s.traceMap[logID]; ok {
+		trace.AlertRecords = append(trace.AlertRecords, record)
+	}
+}
+
+func (s *SyslogService) clearOldTraces(maxAge time.Duration) {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	cutoff := time.Now().Add(-maxAge)
+	for logID, trace := range s.traceMap {
+		if trace.ReceivedAt.Before(cutoff) {
+			delete(s.traceMap, logID)
+		}
+	}
 }

@@ -2,8 +2,11 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { GetDashboardStats } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
 
 const router = useRouter()
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 const stats = ref({
   totalLogs: 0,
@@ -34,8 +37,25 @@ onUnmounted(() => {
 
 async function refreshStats() {
   try {
-    const result = await GetDashboardStats()
-    stats.value = result
+    let result
+    if (isWeb) {
+      result = await WebAPI.GetSystemStats()
+    } else {
+      result = await GetDashboardStats()
+    }
+    stats.value = {
+      totalLogs: result.totalLogs || 0,
+      deviceCount: result.deviceCount || 0,
+      matchedLogs: result.matchedLogs || 0,
+      alertCount: result.alertCount || 0,
+      unmatchedLogs: result.unmatchedLogs || 0,
+      serviceRunning: result.serviceRunning || false,
+      listenPort: result.listenPort || 5140,
+      activeRobots: result.activeRobots || 0,
+      activeFilterPolicies: result.activeFilterPolicies || 0,
+      activeAlertPolicies: result.activeAlertPolicies || 0,
+      parseTemplateCount: result.parseTemplateCount || 0
+    }
   } catch (e) {
     console.error(e)
   }
@@ -235,7 +255,7 @@ function navigateTo(path: string) {
           </div>
           <div v-if="stats.activeAlertPolicies === 0" class="todo-item warning" @click="navigateTo('/robots')">
             <el-icon><Warning /></el-icon>
-            <span>未启用任何告警策略</span>
+            <span>未配置推送关联策略</span>
           </div>
           <div v-if="stats.serviceRunning && stats.activeRobots > 0 && stats.activeFilterPolicies > 0 && stats.activeAlertPolicies > 0" class="todo-item success">
             <el-icon><CircleCheck /></el-icon>
@@ -470,9 +490,9 @@ function navigateTo(path: string) {
           width: 28px;
           height: 28px;
           border-radius: 50%;
-          background: #ffffff;
-          color: #1d1d1f;
-          border: 1.5px solid #1d1d1f;
+          background: var(--bg-card);
+          color: var(--text-primary);
+          border: 1.5px solid var(--border-color);
           display: flex;
           align-items: center;
           justify-content: center;

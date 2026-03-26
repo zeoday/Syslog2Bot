@@ -23,6 +23,7 @@ const menuItems = [
   { path: '/field-mapping-docs', icon: 'Notebook', title: '映射文档', divider: true },
   { path: '/robots', icon: 'ChatDotRound', title: '数据推送', divider: true },
   { path: '/test-tools', icon: 'Position', title: '测试工具', divider: true },
+  { path: '/stats', icon: 'DataAnalysis', title: '数据统计', divider: true },
   { path: '/settings', icon: 'Setting', title: '系统设置' }
 ]
 
@@ -106,10 +107,11 @@ function handleSelect(path: string) {
     }
     
     .logo-text {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 600;
       color: var(--text-primary);
       white-space: nowrap;
+      margin-left: 4px;
     }
   }
   

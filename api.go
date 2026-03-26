@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -157,8 +160,9 @@ func (a *App) GetRobot(id uint) (*DingTalkRobot, error) {
 	return GetRobotByID(id)
 }
 
-func (a *App) AddRobot(robot DingTalkRobot) error {
-	return CreateRobot(&robot)
+func (a *App) AddRobot(robot DingTalkRobot) (DingTalkRobot, error) {
+	err := CreateRobot(&robot)
+	return robot, err
 }
 
 func (a *App) UpdateRobot(robot DingTalkRobot) error {
@@ -233,6 +237,30 @@ func (a *App) SaveConfig(config SystemConfig) error {
 
 func (a *App) GetAlertRecords(page, pageSize int) ([]AlertRecord, int64) {
 	return GetAlertRecords(page, pageSize)
+}
+
+func (a *App) GetAlertRules(robotID uint) []AlertRule {
+	return GetAlertRulesByRobotID(robotID)
+}
+
+func (a *App) AddAlertRule(rule AlertRule) error {
+	return CreateAlertRule(&rule)
+}
+
+func (a *App) UpdateAlertRule(rule AlertRule) error {
+	return UpdateAlertRule(&rule)
+}
+
+func (a *App) DeleteAlertRule(id uint) error {
+	return DeleteAlertRule(id)
+}
+
+func (a *App) GetAlertRule(id uint) (*AlertRule, error) {
+	return GetAlertRuleByID(id)
+}
+
+func (a *App) DeleteAlertRulesByRobotID(robotID uint) error {
+	return DeleteAlertRulesByRobotID(robotID)
 }
 
 func (a *App) TestRegex(pattern, testString string) map[string]interface{} {
@@ -324,9 +352,9 @@ func (a *App) GetDashboardStats() map[string]interface{} {
 	GetDB().Model(&FilterPolicy{}).Where("is_active = ?", true).Count(&filterPolicyCount)
 	stats["activeFilterPolicies"] = filterPolicyCount
 
-	var alertPolicyCount int64
-	GetDB().Model(&AlertPolicy{}).Where("is_active = ?", true).Count(&alertPolicyCount)
-	stats["activeAlertPolicies"] = alertPolicyCount
+	var activeAlertRobotCount int64
+	GetDB().Model(&DingTalkRobot{}).Where("is_active = ? AND filter_policy_ids != '' AND filter_policy_ids IS NOT NULL", true).Count(&activeAlertRobotCount)
+	stats["activeAlertPolicies"] = activeAlertRobotCount
 
 	var parseTemplateCount int64
 	GetDB().Model(&ParseTemplate{}).Count(&parseTemplateCount)
@@ -361,10 +389,10 @@ func (a *App) getActiveDevices() int64 {
 
 func (a *App) getCPUUsage() float64 {
 	var cpuUsage float64
-	
+
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	
+
 	totalTime := time.Since(a.startTime).Seconds()
 	if totalTime > 0 {
 		cpuTime := float64(m.Sys) / 1e9
@@ -373,7 +401,7 @@ func (a *App) getCPUUsage() float64 {
 			cpuUsage = 100
 		}
 	}
-	
+
 	return cpuUsage
 }
 
@@ -393,6 +421,10 @@ func (a *App) getConnections() int {
 
 func (a *App) CleanupLogs(days int) error {
 	return CleanupOldLogs(days)
+}
+
+func (a *App) CleanupAllLogs() error {
+	return CleanupAllLogs()
 }
 
 func (a *App) GetUnmatchedLogsCount() int64 {
@@ -636,4 +668,270 @@ func (a *App) GetLocalIPs() []string {
 	}
 
 	return ips
+}
+
+func (a *App) GetLogTraceInfo(logID uint) *LogTraceInfo {
+	if a.syslogSvc == nil {
+		return nil
+	}
+	return a.syslogSvc.GetTraceInfo(logID)
+}
+
+func (a *App) GetServiceStatus() map[string]interface{} {
+	status := make(map[string]interface{})
+	status["serviceRunning"] = false
+	status["listenPort"] = 0
+	status["protocol"] = ""
+	status["receiveCount"] = 0
+	status["receiveRate"] = 0
+	status["connections"] = 0
+
+	if a.syslogSvc != nil {
+		status["serviceRunning"] = a.syslogSvc.IsRunning()
+		status["listenPort"] = a.syslogSvc.GetPort()
+		status["receiveCount"] = a.syslogSvc.GetReceiveCount()
+		status["receiveRate"] = a.syslogSvc.GetReceiveRate()
+		status["connections"] = a.syslogSvc.GetConnections()
+	}
+
+	return status
+}
+
+type ConfigExport struct {
+	Version        string          `json:"version"`
+	ExportedAt     string          `json:"exportedAt"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	ParseTemplates []ParseTemplate `json:"parseTemplates,omitempty"`
+	FilterPolicies []FilterPolicy  `json:"filterPolicies,omitempty"`
+}
+
+func (a *App) ExportParseTemplates(ids []uint) string {
+	var templates []ParseTemplate
+	GetDB().Where("id IN ?", ids).Find(&templates)
+
+	export := ConfigExport{
+		Version:        "1.0",
+		ExportedAt:     time.Now().Format("2006-01-02T15:04:05Z"),
+		Name:           "解析模板导出",
+		ParseTemplates: templates,
+	}
+
+	data, _ := json.MarshalIndent(export, "", "  ")
+	return string(data)
+}
+
+func (a *App) ExportFilterPolicies(ids []uint) string {
+	var policies []FilterPolicy
+	GetDB().Where("id IN ?", ids).Find(&policies)
+
+	export := ConfigExport{
+		Version:        "1.0",
+		ExportedAt:     time.Now().Format("2006-01-02T15:04:05Z"),
+		Name:           "筛选策略导出",
+		FilterPolicies: policies,
+	}
+
+	data, _ := json.MarshalIndent(export, "", "  ")
+	return string(data)
+}
+
+type ImportResult struct {
+	Success bool     `json:"success"`
+	Message string   `json:"message"`
+	Count   int      `json:"count"`
+	Errors  []string `json:"errors"`
+}
+
+func (a *App) ImportParseTemplates(jsonData string) ImportResult {
+	result := ImportResult{
+		Success: true,
+		Errors:  []string{},
+	}
+
+	var export ConfigExport
+	if err := json.Unmarshal([]byte(jsonData), &export); err != nil {
+		result.Success = false
+		result.Message = "JSON解析失败: " + err.Error()
+		return result
+	}
+
+	var templates []ParseTemplate
+	if len(export.ParseTemplates) > 0 {
+		templates = export.ParseTemplates
+	} else {
+		var rawExport struct {
+			Templates []ParseTemplate `json:"templates"`
+		}
+		if err := json.Unmarshal([]byte(jsonData), &rawExport); err != nil {
+			result.Success = false
+			result.Message = "JSON解析失败: " + err.Error()
+			return result
+		}
+		templates = rawExport.Templates
+	}
+
+	if len(templates) == 0 {
+		result.Success = false
+		result.Message = "未找到解析模板数据"
+		return result
+	}
+
+	for _, template := range templates {
+		template.ID = 0
+		template.CreatedAt = time.Now()
+		template.UpdatedAt = time.Now()
+
+		var existing ParseTemplate
+		if err := GetDB().Where("name = ?", template.Name).First(&existing).Error; err == nil {
+			template.ID = existing.ID
+			if err := UpdateParseTemplate(&template); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("更新模板 %s 失败: %v", template.Name, err))
+			} else {
+				result.Count++
+			}
+		} else {
+			if err := CreateParseTemplate(&template); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("创建模板 %s 失败: %v", template.Name, err))
+			} else {
+				result.Count++
+			}
+		}
+	}
+
+	result.Message = fmt.Sprintf("成功导入 %d 个解析模板", result.Count)
+	if len(result.Errors) > 0 {
+		result.Message += fmt.Sprintf("，%d 个失败", len(result.Errors))
+	}
+
+	return result
+}
+
+func (a *App) ImportFilterPolicies(jsonData string) ImportResult {
+	result := ImportResult{
+		Success: true,
+		Errors:  []string{},
+	}
+
+	var export ConfigExport
+	if err := json.Unmarshal([]byte(jsonData), &export); err != nil {
+		result.Success = false
+		result.Message = "JSON解析失败: " + err.Error()
+		return result
+	}
+
+	var policies []FilterPolicy
+	if len(export.FilterPolicies) > 0 {
+		policies = export.FilterPolicies
+	} else {
+		var rawExport struct {
+			Policies []FilterPolicy `json:"policies"`
+		}
+		if err := json.Unmarshal([]byte(jsonData), &rawExport); err != nil {
+			result.Success = false
+			result.Message = "JSON解析失败: " + err.Error()
+			return result
+		}
+		policies = rawExport.Policies
+	}
+
+	if len(policies) == 0 {
+		result.Success = false
+		result.Message = "未找到筛选策略数据"
+		return result
+	}
+
+	for _, policy := range policies {
+		policy.ID = 0
+		policy.CreatedAt = time.Now()
+		policy.UpdatedAt = time.Now()
+
+		var existing FilterPolicy
+		if err := GetDB().Where("name = ?", policy.Name).First(&existing).Error; err == nil {
+			policy.ID = existing.ID
+			if err := UpdateFilterPolicy(&policy); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("更新策略 %s 失败: %v", policy.Name, err))
+			} else {
+				result.Count++
+			}
+		} else {
+			if err := CreateFilterPolicy(&policy); err != nil {
+				result.Errors = append(result.Errors, fmt.Sprintf("创建策略 %s 失败: %v", policy.Name, err))
+			} else {
+				result.Count++
+			}
+		}
+	}
+
+	result.Message = fmt.Sprintf("成功导入 %d 个筛选策略", result.Count)
+	if len(result.Errors) > 0 {
+		result.Message += fmt.Sprintf("，%d 个失败", len(result.Errors))
+	}
+
+	return result
+}
+
+func (a *App) SaveExportedFile(content, defaultName string) (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	exportDir := homeDir + "/.syslog-alert/exports"
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		return "", err
+	}
+
+	filePath := exportDir + "/" + defaultName
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		return "", err
+	}
+
+	return filePath, nil
+}
+
+func (a *App) GetImportDirectory() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		homeDir, _ := os.UserHomeDir()
+		importDir := homeDir + "/.syslog2bot/imports"
+		os.MkdirAll(importDir, 0755)
+		return importDir
+	}
+	importDir := filepath.Join(filepath.Dir(exePath), "templates")
+	os.MkdirAll(importDir, 0755)
+	return importDir
+}
+
+func (a *App) ScanImportFiles() []string {
+	importDir := a.GetImportDirectory()
+	files, err := os.ReadDir(importDir)
+	if err != nil {
+		return []string{}
+	}
+
+	var jsonFiles []string
+	for _, f := range files {
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".json") {
+			jsonFiles = append(jsonFiles, f.Name())
+		}
+	}
+	return jsonFiles
+}
+
+func (a *App) ReadImportFile(filename string) (string, error) {
+	importDir := a.GetImportDirectory()
+	content, err := os.ReadFile(importDir + "/" + filename)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func (a *App) GetFieldStats(req FieldStatsRequest) FieldStatsResult {
+	return GetFieldStats(req)
+}
+
+func (a *App) GetAvailableStatsFields(policyID uint) []StatsField {
+	return GetAvailableStatsFields(policyID)
 }

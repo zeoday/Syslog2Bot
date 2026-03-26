@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Upload, Download } from '@element-plus/icons-vue'
 import { 
   GetFilterPolicies, 
   AddFilterPolicy, 
@@ -8,8 +9,15 @@ import {
   DeleteFilterPolicy,
   GetParseTemplates,
   GetDevices,
-  GetDeviceGroups
+  GetDeviceGroups,
+  GetFieldMappingDocs,
+  ExportFilterPolicies,
+  ImportFilterPolicies,
+  SaveExportedFile
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 interface FilterPolicy {
   id?: number
@@ -41,6 +49,10 @@ const dialogTitle = ref('添加筛选策略')
 const parseTemplates = ref<any[]>([])
 const devices = ref<any[]>([])
 const deviceGroups = ref<any[]>([])
+const fieldMappingDocs = ref<any[]>([])
+const selectedPolicies = ref<FilterPolicy[]>([])
+const importDialogVisible = ref(false)
+const importJsonContent = ref('')
 
 const formData = ref<FilterPolicy>({
   name: '',
@@ -63,6 +75,78 @@ const newCondition = ref<FilterCondition>({
   field: '',
   operator: 'equals',
   value: ''
+})
+
+interface FieldMappingDoc {
+  id: number
+  name: string
+  deviceType: string
+  description: string
+  fieldMappings: string
+  isActive: boolean
+}
+
+const availableFields = computed(() => {
+  if (!formData.value.parseTemplateId) return []
+  const template = parseTemplates.value.find(t => t.id === formData.value.parseTemplateId)
+  if (!template) return []
+
+  const fields: { value: string; label: string }[] = []
+
+  // 对于智能分隔符类型，从 fieldMapping 中提取 subTemplates
+  if (template.parseType === 'smart_delimiter' && template.fieldMapping) {
+    try {
+      const fieldMappingData = JSON.parse(template.fieldMapping)
+
+      // subTemplates 存储在 fieldMapping 字段内部
+      const subTemplates = fieldMappingData.subTemplates
+      if (!subTemplates) return []
+
+      // 字段位置映射到字段名和中文名称的转换
+      const fieldKeyMap: { [key: string]: { fieldName: string; chineseName: string } } = {
+        'alertNameField': { fieldName: 'alertName', chineseName: '告警名称' },
+        'attackIPField': { fieldName: 'attackIP', chineseName: '攻击IP' },
+        'victimIPField': { fieldName: 'victimIP', chineseName: '受害IP' },
+        'alertTimeField': { fieldName: 'alertTime', chineseName: '告警时间' },
+        'severityField': { fieldName: 'severity', chineseName: '威胁等级' },
+        'attackResultField': { fieldName: 'attackResult', chineseName: '攻击结果' }
+      }
+
+      // 收集所有子模板中配置的字段
+      const configuredFields = new Set<string>()
+      for (const subKey of Object.keys(subTemplates)) {
+        const sub = subTemplates[subKey]
+        for (const fieldKey of Object.keys(sub)) {
+          const fieldInfo = fieldKeyMap[fieldKey]
+          if (fieldInfo) {
+            configuredFields.add(fieldKey)
+          }
+        }
+      }
+
+      // 使用 fieldKeyMap 中的中文名称
+      for (const fieldKey of configuredFields) {
+        const fieldInfo = fieldKeyMap[fieldKey]
+        if (fieldInfo) {
+          fields.push({ value: fieldInfo.fieldName, label: fieldInfo.chineseName + ' (' + fieldInfo.fieldName + ')' })
+        }
+      }
+    } catch (e) {
+      console.error('availableFields error:', e)
+    }
+  } else if (template.fieldMapping) {
+    // 其他模板类型，从 fieldMapping 获取
+    try {
+      const mapping = JSON.parse(template.fieldMapping)
+      for (const key of Object.keys(mapping)) {
+        fields.push({ value: key, label: mapping[key] + ' (' + key + ')' })
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return fields
 })
 
 const operators = [
@@ -93,14 +177,19 @@ onMounted(async () => {
     loadPolicies(),
     loadParseTemplates(),
     loadDevices(),
-    loadDeviceGroups()
+    loadDeviceGroups(),
+    loadFieldMappingDocs()
   ])
 })
 
 async function loadPolicies() {
   loading.value = true
   try {
-    policies.value = await GetFilterPolicies()
+    if (isWeb) {
+      policies.value = await WebAPI.GetFilterPolicies()
+    } else {
+      policies.value = await GetFilterPolicies()
+    }
   } catch (e) {
     console.error(e)
   } finally {
@@ -110,7 +199,11 @@ async function loadPolicies() {
 
 async function loadParseTemplates() {
   try {
-    parseTemplates.value = await GetParseTemplates()
+    if (isWeb) {
+      parseTemplates.value = await WebAPI.GetParseTemplates()
+    } else {
+      parseTemplates.value = await GetParseTemplates()
+    }
   } catch (e) {
     console.error(e)
   }
@@ -132,8 +225,17 @@ async function loadDeviceGroups() {
   }
 }
 
+async function loadFieldMappingDocs() {
+  try {
+    fieldMappingDocs.value = await GetFieldMappingDocs()
+  } catch (e) {
+    console.error(e)
+  }
+}
+
 function handleAdd() {
   dialogTitle.value = '添加筛选策略'
+  const maxPriority = policies.value.length > 0 ? Math.max(...policies.value.map(p => p.priority)) : 0
   formData.value = {
     name: '',
     description: '',
@@ -143,7 +245,7 @@ function handleAdd() {
     conditions: '',
     conditionLogic: 'AND',
     action: 'keep',
-    priority: 0,
+    priority: maxPriority + 1,
     isActive: true,
     dedupEnabled: true,
     dedupWindow: 60,
@@ -151,6 +253,54 @@ function handleAdd() {
   }
   conditions.value = []
   dialogVisible.value = true
+}
+
+function handleSelectionChange(selection: FilterPolicy[]) {
+  selectedPolicies.value = selection
+}
+
+function showImportDialog() {
+  importJsonContent.value = ''
+  importDialogVisible.value = true
+}
+
+async function handleImport() {
+  if (!importJsonContent.value.trim()) {
+    ElMessage.warning('请输入JSON内容')
+    return
+  }
+  
+  try {
+    const result = await ImportFilterPolicies(importJsonContent.value)
+    if (result.success) {
+      ElMessage.success(result.message)
+      importDialogVisible.value = false
+      loadPolicies()
+    } else {
+      ElMessage.error(result.message)
+    }
+  } catch (e: any) {
+    ElMessage.error('导入失败: ' + (e.message || '未知错误'))
+  }
+}
+
+async function handleExport() {
+  if (selectedPolicies.value.length === 0) {
+    ElMessage.warning('请先选择要导出的策略')
+    return
+  }
+  
+  const ids = selectedPolicies.value.map(p => p.id).filter(Boolean) as number[]
+  try {
+    const jsonContent = await ExportFilterPolicies(ids)
+    const timestamp = new Date().toISOString().slice(0, 10)
+    const filename = `filter_policies_${timestamp}.json`
+    
+    const filePath = await SaveExportedFile(jsonContent, filename)
+    ElMessage.success(`已导出到: ${filePath}`)
+  } catch (e: any) {
+    ElMessage.error('导出失败: ' + (e.message || '未知错误'))
+  }
 }
 
 function handleEdit(row: FilterPolicy) {
@@ -171,7 +321,11 @@ function handleEdit(row: FilterPolicy) {
 async function handleDelete(row: FilterPolicy) {
   try {
     await ElMessageBox.confirm('确定要删除该筛选策略吗？', '提示', { type: 'warning' })
-    await DeleteFilterPolicy(row.id!)
+    if (isWeb) {
+      await WebAPI.DeleteFilterPolicy(row.id!)
+    } else {
+      await DeleteFilterPolicy(row.id!)
+    }
     ElMessage.success('删除成功')
     loadPolicies()
   } catch (e: any) {
@@ -202,10 +356,18 @@ async function handleSubmit() {
   
   try {
     if (formData.value.id) {
-      await UpdateFilterPolicy(formData.value)
+      if (isWeb) {
+        await WebAPI.UpdateFilterPolicy(formData.value)
+      } else {
+        await UpdateFilterPolicy(formData.value)
+      }
       ElMessage.success('更新成功')
     } else {
-      await AddFilterPolicy(formData.value)
+      if (isWeb) {
+        await WebAPI.AddFilterPolicy(formData.value)
+      } else {
+        await AddFilterPolicy(formData.value)
+      }
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false
@@ -237,14 +399,25 @@ function getActionText(action: string): string {
       <template #header>
         <div class="card-header">
           <span>筛选策略</span>
-          <el-button type="primary" @click="handleAdd">
-            <el-icon><Plus /></el-icon>
-            添加策略
-          </el-button>
+          <div class="header-actions">
+            <el-button @click="showImportDialog">
+              <el-icon><Upload /></el-icon>
+              导入策略
+            </el-button>
+            <el-button @click="handleExport" :disabled="selectedPolicies.length === 0">
+              <el-icon><Download /></el-icon>
+              导出策略
+            </el-button>
+            <el-button type="primary" @click="handleAdd">
+              <el-icon><Plus /></el-icon>
+              添加策略
+            </el-button>
+          </div>
         </div>
       </template>
       
-      <el-table :data="policies" v-loading="loading" stripe>
+      <el-table :data="policies" v-loading="loading" stripe @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="id" label="ID" width="70" />
         <el-table-column prop="name" label="策略名称" width="160" show-overflow-tooltip />
         <el-table-column label="解析模板" width="140" show-overflow-tooltip>
@@ -308,7 +481,21 @@ function getActionText(action: string): string {
         <el-form-item label="筛选条件">
           <div class="conditions-editor">
             <div class="condition-input">
-              <el-input v-model="newCondition.field" placeholder="字段名" style="width: 150px" />
+              <el-select 
+                v-model="newCondition.field" 
+                placeholder="选择字段" 
+                style="width: 200px" 
+                filterable
+                clearable
+                :disabled="!formData.parseTemplateId"
+              >
+                <el-option 
+                  v-for="f in availableFields" 
+                  :key="f.value" 
+                  :label="f.label" 
+                  :value="f.value" 
+                />
+              </el-select>
               <el-select v-model="newCondition.operator" style="width: 120px">
                 <el-option v-for="op in operators" :key="op.value" :label="op.label" :value="op.value" />
               </el-select>
@@ -318,6 +505,7 @@ function getActionText(action: string): string {
                 style="width: 200px" 
               />
               <el-button type="primary" @click="addCondition">添加</el-button>
+              <span v-if="!formData.parseTemplateId" style="color: #999; margin-left: 10px; font-size: 12px;">请先选择解析模板</span>
             </div>
             
             <div v-if="conditions.length > 0" class="conditions-list">
@@ -407,6 +595,28 @@ function getActionText(action: string): string {
         <el-button type="primary" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="importDialogVisible" title="导入筛选策略" width="600px">
+      <el-form label-width="80px">
+        <el-form-item label="JSON内容">
+          <el-input
+            v-model="importJsonContent"
+            type="textarea"
+            :rows="10"
+            placeholder="粘贴JSON格式的筛选策略配置..."
+          />
+        </el-form-item>
+        <el-form-item label="导入目录">
+          <el-text type="info" size="small">
+            也可将JSON文件放入程序根目录下的 templates/ 目录
+          </el-text>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleImport">导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -416,6 +626,11 @@ function getActionText(action: string): string {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    
+    .header-actions {
+      display: flex;
+      gap: 10px;
+    }
   }
   
   .conditions-editor {

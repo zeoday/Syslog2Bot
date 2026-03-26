@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '数据推送' }
   },
   {
+    path: '/stats',
+    name: 'Stats',
+    component: () => import('@/views/Stats.vue'),
+    meta: { title: '数据统计' }
+  },
+  {
     path: '/test-tools',
     name: 'TestTools',
     component: () => import('@/views/TestTools.vue'),
@@ -75,7 +81,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to, _from, next) => {
-  document.title = `${to.meta.title || 'Syslog Alert'} - Syslog Alert`
+  document.title = `${to.meta.title || 'Syslog2Bot'} - Syslog2Bot`
   
   const appStore = useAppStore()
   appStore.setPageTitle(to.meta.title as string || '系统状态')

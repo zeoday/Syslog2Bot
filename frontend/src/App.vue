@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useAppStore } from '@/stores/app'
+import { useThemeStore } from '@/stores/theme'
 import { ElMessage } from 'element-plus'
 import Sidebar from '@/components/Sidebar.vue'
 import { WindowMinimise, WindowMaximise, WindowClose, GetPlatformInfo } from '../wailsjs/go/main/App'
 
 const appStore = useAppStore()
+const themeStore = useThemeStore()
 const isCollapse = ref(false)
 const isWindows = ref(false)
 
 onMounted(async () => {
+  themeStore.initTheme()
   await appStore.initApp()
   try {
     const platform = await GetPlatformInfo()
@@ -33,14 +36,26 @@ async function handleServiceChange(running: boolean) {
     await appStore.refreshStats()
   }
 }
+
+function handleThemeToggle() {
+  themeStore.toggleTheme()
+}
 </script>
 
 <template>
   <div class="app-container">
     <div class="titlebar-row" style="--wails-draggable: drag">
-      <div class="titlebar-title">Syslog2Bot v1.3.2 — By 迷人安全</div>
+      <div class="titlebar-title">Syslog2Bot v1.5.0 — By 迷人安全</div>
       <div class="titlebar-actions" style="--wails-draggable: no-drag">
-        <el-switch 
+        <el-button
+          circle
+          size="small"
+          class="theme-toggle-btn"
+          @click="handleThemeToggle"
+        >
+          <span class="theme-icon">{{ themeStore.isDark ? '☀️' : '☾' }}</span>
+        </el-button>
+        <el-switch
           :model-value="appStore.serviceRunning"
           @change="handleServiceChange"
           active-text="ON"
@@ -117,7 +132,31 @@ async function handleServiceChange(running: boolean) {
     display: flex;
     align-items: center;
     gap: 12px;
-    
+
+    .theme-toggle-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg-hover);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      transition: all 0.2s ease;
+
+      &:hover {
+        background: var(--bg-active);
+        border-color: var(--accent-color);
+        color: var(--accent-color);
+      }
+
+      .theme-icon {
+        font-size: 16px;
+        line-height: 1;
+      }
+    }
+
     .service-switch {
       --el-switch-on-color: var(--accent-color);
       --el-switch-off-color: var(--text-muted);

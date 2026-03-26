@@ -3,8 +3,11 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '@/stores/app'
 import { ElMessage } from 'element-plus'
 import { GetLocalIP, GetDashboardStats } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
 
 const appStore = useAppStore()
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 const localIP = ref('')
 const port = ref(5140)
@@ -41,7 +44,20 @@ const maxHistoryPoints = 60
 onMounted(async () => {
   await appStore.refreshStats()
   try {
-    localIP.value = await GetLocalIP()
+    if (isWeb) {
+      const ips = await WebAPI.GetLocalIPs()
+      if (Array.isArray(ips)) {
+        const preferredIP = ips.find((ip: string) => ip.startsWith('10.')) || 
+                           ips.find((ip: string) => ip.startsWith('192.168.')) ||
+                           ips.find((ip: string) => ip.startsWith('172.')) ||
+                           ips[0] || '127.0.0.1'
+        localIP.value = preferredIP
+      } else {
+        localIP.value = ips
+      }
+    } else {
+      localIP.value = await GetLocalIP()
+    }
   } catch (e) {
     localIP.value = '127.0.0.1'
   }
@@ -64,7 +80,12 @@ onUnmounted(() => {
 
 async function loadSystemStats() {
   try {
-    const stats = await GetDashboardStats()
+    let stats
+    if (isWeb) {
+      stats = await WebAPI.GetSystemStats()
+    } else {
+      stats = await GetDashboardStats()
+    }
     systemStats.value = {
       totalLogs: stats.totalLogs || 0,
       deviceCount: stats.deviceCount || 0,
@@ -207,7 +228,7 @@ function getSmoothLinePath(data: number[]): string {
                 <el-icon><VideoPlay /></el-icon>
                 启动服务
               </el-button>
-              <el-button type="danger" :disabled="!appStore.serviceRunning" @click="handleStop">
+              <el-button class="stop-btn" :disabled="!appStore.serviceRunning" @click="handleStop">
                 <el-icon><VideoPause /></el-icon>
                 停止服务
               </el-button>
@@ -345,20 +366,20 @@ function getSmoothLinePath(data: number[]): string {
       
       .control-card {
         width: 100%;
-        background: var(--el-bg-color);
+        background: var(--bg-card);
         border-radius: 12px;
-        box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.06);
-        border: 1px solid var(--el-border-color-lighter);
+        box-shadow: var(--card-shadow);
+        border: 1px solid var(--border-color);
         overflow: hidden;
         display: flex;
         flex-direction: column;
-        
+
         .card-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
           padding: 14px 18px;
-          border-bottom: 1px solid var(--el-border-color-lighter);
+          border-bottom: 1px solid var(--border-color);
           font-weight: 500;
           font-size: 14px;
           flex-shrink: 0;
@@ -384,7 +405,7 @@ function getSmoothLinePath(data: number[]): string {
               
               .label {
                 width: 75px;
-                color: var(--el-text-color-secondary);
+                color: var(--text-secondary);
                 font-size: 13px;
               }
               
@@ -398,6 +419,24 @@ function getSmoothLinePath(data: number[]): string {
           .button-row {
             display: flex;
             gap: 12px;
+
+            .stop-btn {
+              background: var(--bg-hover);
+              border: 1px solid var(--border-color);
+              color: var(--text-secondary);
+
+              &:hover {
+                background: var(--bg-active);
+                color: var(--accent-color);
+                border-color: var(--accent-color);
+              }
+
+              &:disabled {
+                background: var(--bg-hover);
+                border-color: var(--border-color);
+                color: var(--text-muted);
+              }
+            }
           }
         }
       }
@@ -405,17 +444,17 @@ function getSmoothLinePath(data: number[]): string {
     
     .stats-panel {
       flex: 1;
-      background: var(--el-bg-color);
+      background: var(--bg-card);
       border-radius: 12px;
-      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.06);
-      border: 1px solid var(--el-border-color-lighter);
+      box-shadow: var(--card-shadow);
+      border: 1px solid var(--border-color);
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      
+
       .panel-header {
         padding: 14px 18px;
-        border-bottom: 1px solid var(--el-border-color-lighter);
+        border-bottom: 1px solid var(--border-color);
         font-weight: 500;
         font-size: 14px;
       }
@@ -426,10 +465,10 @@ function getSmoothLinePath(data: number[]): string {
         grid-template-columns: repeat(2, 1fr);
         grid-template-rows: repeat(2, 1fr);
         gap: 1px;
-        background: var(--el-border-color-lighter);
-        
+        background: var(--border-color);
+
         .stat-item {
-          background: var(--el-bg-color);
+          background: var(--bg-card);
           padding: 16px;
           display: flex;
           flex-direction: column;
@@ -437,28 +476,28 @@ function getSmoothLinePath(data: number[]): string {
           justify-content: center;
           gap: 8px;
           transition: background 0.2s;
-          
+
           &:hover {
-            background: var(--el-fill-color-light);
+            background: var(--bg-hover);
           }
-          
+
           .stat-icon {
-            color: #a0cfff;
+            color: var(--accent-color);
           }
-          
+
           .stat-info {
             text-align: center;
-            
+
             .stat-value {
               font-size: 22px;
               font-weight: 600;
-              color: var(--el-text-color-primary);
+              color: var(--text-primary);
               line-height: 1.2;
             }
-            
+
             .stat-title {
               font-size: 12px;
-              color: var(--el-text-color-secondary);
+              color: var(--text-secondary);
               margin-top: 2px;
             }
           }
@@ -466,21 +505,21 @@ function getSmoothLinePath(data: number[]): string {
       }
     }
   }
-  
+
   .system-resources {
     .resource-card {
-      background: var(--el-bg-color);
+      background: var(--bg-card);
       border-radius: 12px;
-      box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.06);
-      border: 1px solid var(--el-border-color-lighter);
+      box-shadow: var(--card-shadow);
+      border: 1px solid var(--border-color);
       overflow: hidden;
-      
+
       .card-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding: 14px 18px;
-        border-bottom: 1px solid var(--el-border-color-lighter);
+        border-bottom: 1px solid var(--border-color);
         font-weight: 500;
         font-size: 14px;
       }
@@ -495,66 +534,66 @@ function getSmoothLinePath(data: number[]): string {
       
       .resource-item {
         padding: 24px;
-        background: var(--el-fill-color-lighter);
+        background: var(--bg-hover);
         border-radius: 10px;
         text-align: center;
         transition: all 0.3s ease;
-        
+
         &:hover {
-          background: var(--el-fill-color);
+          background: var(--bg-active);
           transform: translateY(-2px);
         }
-        
+
         .resource-header {
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 6px;
           font-size: 13px;
-          color: var(--el-text-color-secondary);
+          color: var(--text-secondary);
           margin-bottom: 12px;
         }
-        
+
         .resource-value {
           font-size: 24px;
           font-weight: 600;
-          color: var(--el-text-color-primary);
+          color: var(--text-primary);
           margin-bottom: 12px;
         }
-        
+
         .resource-bar {
           height: 6px;
-          background: var(--el-fill-color);
+          background: var(--bg-secondary);
           border-radius: 3px;
           overflow: hidden;
-          
+
           .bar-fill {
             height: 100%;
-            background: linear-gradient(90deg, #409eff, #67c23a);
+            background: linear-gradient(90deg, var(--accent-color), var(--success-color));
             border-radius: 3px;
             transition: width 0.3s ease;
           }
         }
-        
+
         &.chart-item {
           padding: 24px;
-          background: var(--el-fill-color-lighter);
+          background: var(--bg-hover);
           border-radius: 10px;
           text-align: center;
           transition: all 0.3s ease;
-          
+
           &:hover {
-            background: var(--el-fill-color);
+            background: var(--bg-active);
             transform: translateY(-2px);
           }
-          
+
           .resource-header {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 6px;
             font-size: 13px;
-            color: var(--el-text-color-secondary);
+            color: var(--text-secondary);
             margin-bottom: 12px;
           }
           

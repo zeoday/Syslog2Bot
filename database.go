@@ -1,9 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -16,32 +20,32 @@ var (
 )
 
 func getDataDir() string {
-	// 优先使用环境变量中指定的路径（方便开发和测试）
 	if envDataDir := os.Getenv("SYSLG_ALERT_DATA_DIR"); envDataDir != "" {
 		return envDataDir
 	}
 
-	// 优先检查旧路径是否存在数据库（保持向后兼容）
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		oldPath := filepath.Join(homeDir, ".syslog-alert")
-		if _, err := os.Stat(filepath.Join(oldPath, "syslog.db")); err == nil {
-			return oldPath
-		}
-	}
-
-	// 使用 exe 同目录的 data 文件夹
 	exePath, err := os.Executable()
-	if err == nil {
-		return filepath.Join(filepath.Dir(exePath), "data")
+	if err != nil {
+		log.Printf("[DB] Failed to get executable path: %v, using './data'\n", err)
+		return "./data"
+	}
+	exeDir := filepath.Dir(exePath)
+
+	dataPath := filepath.Join(exeDir, "data")
+	if _, err := os.Stat(dataPath); err == nil {
+		return dataPath
 	}
 
-	// 备用方案
-	if homeDir, err := os.UserHomeDir(); err == nil {
-		return filepath.Join(homeDir, ".syslog-alert")
+	if err := os.MkdirAll(dataPath, 0755); err != nil {
+		log.Printf("[DB] Failed to create data directory: %v\n", err)
+	} else {
+		log.Printf("[DB] Created data directory: %s\n", dataPath)
 	}
+	return dataPath
+}
 
-	return "./data"
+func GetDataDir() string {
+	return getDataDir()
 }
 
 func GetDB() *gorm.DB {
@@ -53,7 +57,8 @@ func GetDB() *gorm.DB {
 		}
 
 		dbPath := filepath.Join(dataDir, "syslog.db")
-		db, err = gorm.Open(sqlite.Open(dbPath+"?_journal_mode=WAL&_busy_timeout=5000&_sync=NORMAL"), &gorm.Config{
+		dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=10000&_sync=NORMAL&_cache_size=-64000", dbPath)
+		db, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
 			Logger: logger.Default.LogMode(logger.Silent),
 		})
 		if err != nil {
@@ -64,8 +69,15 @@ func GetDB() *gorm.DB {
 		if err != nil {
 			panic("Failed to get database connection: " + err.Error())
 		}
-		sqlDB.SetMaxOpenConns(1)
-		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetMaxOpenConns(5)
+		sqlDB.SetMaxIdleConns(2)
+		sqlDB.SetConnMaxLifetime(0)
+
+		db.Exec("PRAGMA journal_mode = WAL")
+		db.Exec("PRAGMA synchronous = NORMAL")
+		db.Exec("PRAGMA cache_size = -64000")
+		db.Exec("PRAGMA temp_store = MEMORY")
+		db.Exec("PRAGMA mmap_size = 268435456")
 
 		autoMigrate()
 	})
@@ -85,6 +97,7 @@ func autoMigrate() {
 		&SyslogLog{},
 		&Template{},
 		&DingTalkRobot{},
+		&AlertRule{},
 		&AlertRecord{},
 		&SystemConfig{},
 		&FieldMappingDoc{},
@@ -93,10 +106,190 @@ func autoMigrate() {
 		panic("Failed to migrate database: " + err.Error())
 	}
 
+	ensureIndexes()
 	initDefaultConfig()
-	initDefaultTemplates()
+	loadTemplatesFromDir()
 	initDefaultFieldMappingDocs()
-	initDefaultFilterPolicies()
+}
+
+func loadTemplatesFromDir() {
+	templatesDir := getTemplatesDir()
+	log.Printf("[DB] Templates directory: %s\n", templatesDir)
+
+	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+		log.Printf("[DB] Templates directory not found: %s\n", templatesDir)
+		return
+	}
+
+	parseTemplatesFile := filepath.Join(templatesDir, "parse_templates.json")
+	log.Printf("[DB] Checking parse templates file: %s\n", parseTemplatesFile)
+	if _, err := os.Stat(parseTemplatesFile); err == nil {
+		log.Printf("[DB] Parse templates file exists, loading...\n")
+		loadParseTemplatesFromFile(parseTemplatesFile)
+	} else {
+		log.Printf("[DB] Parse templates file not found or error: %v\n", err)
+	}
+
+	filterPoliciesFile := filepath.Join(templatesDir, "filter_policies.json")
+	log.Printf("[DB] Checking filter policies file: %s\n", filterPoliciesFile)
+	if _, err := os.Stat(filterPoliciesFile); err == nil {
+		log.Printf("[DB] Filter policies file exists, loading...\n")
+		loadFilterPoliciesFromFile(filterPoliciesFile)
+	} else {
+		log.Printf("[DB] Filter policies file not found or error: %v\n", err)
+	}
+}
+
+func getTemplatesDir() string {
+	if envDir := os.Getenv("SYSLG_ALERT_TEMPLATES_DIR"); envDir != "" {
+		return envDir
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Printf("[DB] Failed to get executable path: %v, using relative 'templates'\n", err)
+		return "templates"
+	}
+	exeDir := filepath.Dir(exePath)
+	log.Printf("[DB] Executable: %s\n", exePath)
+	log.Printf("[DB] Exe directory: %s\n", exeDir)
+
+	templatesPath := filepath.Join(exeDir, "templates")
+	if _, err := os.Stat(templatesPath); err == nil {
+		log.Printf("[DB] Found templates: %s\n", templatesPath)
+		return templatesPath
+	}
+
+	log.Printf("[DB] Templates dir (default): %s\n", templatesPath)
+	return templatesPath
+}
+
+func loadParseTemplatesFromFile(filePath string) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("[DB] Failed to read parse templates file: %v\n", err)
+		return
+	}
+
+	var data struct {
+		Version   string `json:"version"`
+		Templates []struct {
+			Name           string `json:"name"`
+			Description    string `json:"description"`
+			ParseType      string `json:"parseType"`
+			HeaderRegex    string `json:"headerRegex"`
+			FieldMapping   string `json:"fieldMapping"`
+			ValueTransform string `json:"valueTransform"`
+			DeviceType     string `json:"deviceType"`
+			IsActive       bool   `json:"isActive"`
+		} `json:"templates"`
+	}
+
+	if err := json.Unmarshal(content, &data); err != nil {
+		log.Printf("[DB] Failed to parse parse templates file: %v\n", err)
+		return
+	}
+
+	log.Printf("[DB] Found %d parse templates in JSON file\n", len(data.Templates))
+
+	for _, t := range data.Templates {
+		var existing ParseTemplate
+		result := db.Where("name = ?", t.Name).First(&existing)
+		if result.Error != nil {
+			if result.Error == gorm.ErrRecordNotFound {
+				template := ParseTemplate{
+					Name:           t.Name,
+					Description:    t.Description,
+					ParseType:      t.ParseType,
+					HeaderRegex:    t.HeaderRegex,
+					FieldMapping:   t.FieldMapping,
+					ValueTransform: t.ValueTransform,
+					DeviceType:     t.DeviceType,
+					IsActive:       t.IsActive,
+				}
+				if err := db.Create(&template).Error; err != nil {
+					log.Printf("[DB] Failed to create template %s: %v\n", t.Name, err)
+				} else {
+					log.Printf("[DB] Loaded parse template: %s\n", t.Name)
+				}
+			} else {
+				log.Printf("[DB] Error checking template %s: %v\n", t.Name, result.Error)
+			}
+		} else {
+			log.Printf("[DB] Template %s already exists, skipping\n", t.Name)
+		}
+	}
+}
+
+func loadFilterPoliciesFromFile(filePath string) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Printf("[DB] Failed to read filter policies file: %v\n", err)
+		return
+	}
+
+	var data struct {
+		Version  string `json:"version"`
+		Policies []struct {
+			Name              string `json:"name"`
+			Description       string `json:"description"`
+			ParseTemplateName string `json:"parseTemplateName"`
+			Conditions        string `json:"conditions"`
+			ConditionLogic    string `json:"conditionLogic"`
+			Action            string `json:"action"`
+			Priority          int    `json:"priority"`
+			IsActive          bool   `json:"isActive"`
+			DedupEnabled      bool   `json:"dedupEnabled"`
+			DedupWindow       int    `json:"dedupWindow"`
+			DropUnmatched     bool   `json:"dropUnmatched"`
+		} `json:"policies"`
+	}
+
+	if err := json.Unmarshal(content, &data); err != nil {
+		log.Printf("[DB] Failed to parse filter policies file: %v\n", err)
+		return
+	}
+
+	for _, p := range data.Policies {
+		var existing FilterPolicy
+		result := db.Where("name = ?", p.Name).First(&existing)
+		if result.Error == gorm.ErrRecordNotFound {
+			var parseTemplateID uint
+			var pt ParseTemplate
+			if db.Where("name = ?", p.ParseTemplateName).First(&pt).Error == nil {
+				parseTemplateID = pt.ID
+			}
+
+			policy := FilterPolicy{
+				Name:            p.Name,
+				Description:     p.Description,
+				ParseTemplateID: parseTemplateID,
+				Conditions:      p.Conditions,
+				ConditionLogic:  p.ConditionLogic,
+				Action:          p.Action,
+				Priority:        p.Priority,
+				IsActive:        p.IsActive,
+				DedupEnabled:    p.DedupEnabled,
+				DedupWindow:     p.DedupWindow,
+				DropUnmatched:   p.DropUnmatched,
+			}
+			if err := db.Create(&policy).Error; err != nil {
+				log.Printf("[DB] Failed to create policy %s: %v\n", p.Name, err)
+			} else {
+				log.Printf("[DB] Loaded filter policy: %s\n", p.Name)
+			}
+		}
+	}
+}
+
+func ensureIndexes() {
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_syslog_logs_received_at ON syslog_logs(received_at)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_syslog_logs_device_id ON syslog_logs(device_id)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_syslog_logs_filter_status ON syslog_logs(filter_status)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_syslog_logs_device_filter ON syslog_logs(device_id, filter_status)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_alert_records_created_at ON alert_records(created_at)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_devices_enabled ON devices(enabled)")
+	log.Printf("[DB] Indexes ensured\n")
 }
 
 func initDefaultConfig() {
@@ -105,13 +298,13 @@ func initDefaultConfig() {
 	if result.Error == gorm.ErrRecordNotFound {
 		db.Create(&SystemConfig{
 			ListenPort:            5140,
-			LogRetention:          7,
+			LogRetention:          3,
 			MaxLogSize:            524288000,
 			AutoStart:             false,
 			MinimizeToTray:        true,
 			AlertEnabled:          true,
 			AlertInterval:         60,
-			UnmatchedLogRetention: 7,
+			UnmatchedLogRetention: 3,
 			UnmatchedLogAlert:     true,
 			DefaultFilterAction:   "keep",
 			Theme:                 "dark",
@@ -440,61 +633,35 @@ func initDefaultFieldMappingDocs() {
 	}
 }
 
-func initDefaultFilterPolicies() {
-	// 云锁筛选策略 - 使用macApp中的配置
-	var yunsuoPolicyCount int64
-	db.Model(&FilterPolicy{}).Where("name = ?", "云锁-高危告警通知").Count(&yunsuoPolicyCount)
-	if yunsuoPolicyCount == 0 {
-		var yunsuoTemplate ParseTemplate
-		db.Where("name = ?", "云锁-告警模板").First(&yunsuoTemplate)
-
-		if yunsuoTemplate.ID > 0 {
-			db.Create(&FilterPolicy{
-				Name:            "云锁-高危告警通知",
-				Description:     "筛选云锁高危级别告警",
-				DeviceID:        0,
-				DeviceGroupID:   0,
-				ParseTemplateID: yunsuoTemplate.ID,
-				Conditions:      `[{"field":"levelDesc","operator":"equals","value":"高危"}]`,
-				ConditionLogic:  "AND",
-				Action:          "keep",
-				Priority:        20,
-				IsActive:        true,
-			})
-		}
-	}
-
-	// 天眼筛选策略 - 使用macApp中的配置
-	var tianyanPolicyCount int64
-	db.Model(&FilterPolicy{}).Where("name = ?", "天眼-高危告警").Count(&tianyanPolicyCount)
-	if tianyanPolicyCount == 0 {
-		var tianyanTemplate ParseTemplate
-		db.Where("name = ?", "天眼-组合解析").First(&tianyanTemplate)
-
-		if tianyanTemplate.ID > 0 {
-			db.Create(&FilterPolicy{
-				Name:            "天眼-高危告警",
-				Description:     "筛选天眼高危级别告警(高危,危急)",
-				DeviceID:        0,
-				DeviceGroupID:   0,
-				ParseTemplateID: tianyanTemplate.ID,
-				Conditions:      `[{"field":"severity","operator":"in","value":"高危,危急"}]`,
-				ConditionLogic:  "AND",
-				Action:          "keep",
-				Priority:        20,
-				IsActive:        true,
-			})
-		}
-	}
-}
-
 func GetSystemConfig() SystemConfig {
 	var config SystemConfig
 	db.First(&config)
-	if config.DataDir == "" {
-		config.DataDir = getDataDir()
-	}
+	config.DataDir = getDataDir()
+	config.ConfigDir = getConfigDir()
 	return config
+}
+
+func getConfigDir() string {
+	if envConfigDir := os.Getenv("SYSLG_ALERT_CONFIG_DIR"); envConfigDir != "" {
+		return envConfigDir
+	}
+
+	exePath, err := os.Executable()
+	if err == nil {
+		exeDir := filepath.Dir(exePath)
+		parentDir := filepath.Dir(exeDir)
+		configPath := filepath.Join(parentDir, "templates")
+		if _, err := os.Stat(configPath); err == nil {
+			return configPath
+		}
+		configPath2 := filepath.Join(exeDir, "templates")
+		if _, err := os.Stat(configPath2); err == nil {
+			return configPath2
+		}
+		return configPath
+	}
+
+	return "./templates"
 }
 
 func UpdateSystemConfig(config SystemConfig) error {
@@ -592,6 +759,12 @@ func GetOutputTemplates() []OutputTemplate {
 func GetOutputTemplateByID(id uint) (*OutputTemplate, error) {
 	var template OutputTemplate
 	err := db.First(&template, id).Error
+	return &template, err
+}
+
+func GetOutputTemplateByPlatform(platform string) (*OutputTemplate, error) {
+	var template OutputTemplate
+	err := db.Where("platform = ? AND is_active = ?", platform, true).First(&template).Error
 	return &template, err
 }
 
@@ -786,11 +959,60 @@ func GetAlertCount() int64 {
 }
 
 func CleanupOldLogs(days int) error {
-	return db.Where("received_at < datetime('now', '-' || ? || ' days')", days).Delete(&SyslogLog{}).Error
+	cutoff := time.Now().AddDate(0, 0, -days)
+
+	result := db.Where("received_at < ?", cutoff).Delete(&SyslogLog{})
+	if result.Error != nil {
+		return result.Error
+	}
+
+	log.Printf("[CLEANUP] Deleted %d old logs (cutoff: %s)\n", result.RowsAffected, cutoff.Format("2006-01-02 15:04:05"))
+
+	if result.RowsAffected > 1000 {
+		go func() {
+			sqlDB, _ := db.DB()
+			if sqlDB != nil {
+				sqlDB.Exec("PRAGMA wal_checkpoint(FULL)")
+				sqlDB.Exec("VACUUM")
+				log.Printf("[CLEANUP] Database vacuum completed (deleted %d rows)\n", result.RowsAffected)
+			}
+		}()
+	}
+	return nil
 }
 
 func CleanupUnmatchedLogs(days int) error {
-	return db.Where("filter_status = ? AND received_at < datetime('now', '-' || ? || ' days')", "unmatched", days).Delete(&SyslogLog{}).Error
+	cutoff := time.Now().AddDate(0, 0, -days)
+	result := db.Where("filter_status = ? AND received_at < ?", "unmatched", cutoff).Delete(&SyslogLog{})
+	if result.Error != nil {
+		return result.Error
+	}
+
+	log.Printf("[CLEANUP] Deleted %d unmatched logs (cutoff: %s)\n", result.RowsAffected, cutoff.Format("2006-01-02 15:04:05"))
+
+	if result.RowsAffected > 1000 {
+		go func() {
+			sqlDB, _ := db.DB()
+			if sqlDB != nil {
+				sqlDB.Exec("PRAGMA wal_checkpoint(FULL)")
+				sqlDB.Exec("VACUUM")
+				log.Printf("[CLEANUP] Unmatched vacuum completed\n")
+			}
+		}()
+	}
+	return nil
+}
+
+func CleanupAllLogs() error {
+	result := db.Exec("DELETE FROM syslog_logs")
+	if result.Error != nil {
+		return result.Error
+	}
+	log.Printf("[CLEANUP] Deleted all logs\n")
+	db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+	db.Exec("VACUUM")
+	log.Printf("[CLEANUP] Database vacuum completed\n")
+	return nil
 }
 
 func GetActiveAlertPolicies() []AlertPolicy {
@@ -803,6 +1025,24 @@ func GetAlertPoliciesByFilterPolicyID(filterPolicyID uint) []AlertPolicy {
 	var policies []AlertPolicy
 	db.Where("filter_policy_id = ? AND is_active = ?", filterPolicyID, true).Find(&policies)
 	return policies
+}
+
+func GetRobotsByFilterPolicyID(filterPolicyID uint) []DingTalkRobot {
+	var rules []AlertRule
+	db.Where("filter_policy_id = ? AND is_active = ?", filterPolicyID, true).Find(&rules)
+
+	var robotIDs []uint
+	for _, rule := range rules {
+		robotIDs = append(robotIDs, rule.RobotID)
+	}
+
+	if len(robotIDs) == 0 {
+		return []DingTalkRobot{}
+	}
+
+	var robots []DingTalkRobot
+	db.Where("id IN ? AND is_active = ?", robotIDs, true).Find(&robots)
+	return robots
 }
 
 func UpdateLogFilterStatus(logID uint, status string, policyID uint) error {
@@ -821,6 +1061,43 @@ func UpdateLogAlertStatus(logID uint, status string, policyID uint) error {
 		"alert_status":    status,
 		"alert_policy_id": policyID,
 	}).Error
+}
+
+func GetAlertRulesByRobotID(robotID uint) []AlertRule {
+	var rules []AlertRule
+	db.Where("robot_id = ? AND is_active = ?", robotID, true).Order("created_at ASC").Find(&rules)
+	return rules
+}
+
+func GetAlertRulesByFilterPolicyID(filterPolicyID uint) []AlertRule {
+	var rules []AlertRule
+	db.Where("filter_policy_id = ? AND is_active = ?", filterPolicyID, true).Find(&rules)
+	return rules
+}
+
+func CreateAlertRule(rule *AlertRule) error {
+	return db.Create(rule).Error
+}
+
+func UpdateAlertRule(rule *AlertRule) error {
+	return db.Save(rule).Error
+}
+
+func DeleteAlertRule(id uint) error {
+	return db.Delete(&AlertRule{}, id).Error
+}
+
+func DeleteAlertRulesByRobotID(robotID uint) error {
+	return db.Where("robot_id = ?", robotID).Delete(&AlertRule{}).Error
+}
+
+func GetAlertRuleByID(id uint) (*AlertRule, error) {
+	var rule AlertRule
+	err := db.First(&rule, id).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rule, nil
 }
 
 func UpdateLogParsedFields(logID uint, parsedData, parsedFields string) error {
@@ -864,4 +1141,257 @@ func UpdateFieldMappingDoc(doc *FieldMappingDoc) error {
 
 func DeleteFieldMappingDoc(id uint) error {
 	return db.Delete(&FieldMappingDoc{}, id).Error
+}
+
+func GetFieldStats(req FieldStatsRequest) FieldStatsResult {
+	result := FieldStatsResult{
+		Field: req.Field,
+	}
+
+	query := db.Model(&SyslogLog{}).Session(&gorm.Session{})
+
+	if req.FilterPolicyID > 0 {
+		query = query.Where("matched_policy_id = ?", req.FilterPolicyID)
+	}
+	if req.StartTime != "" {
+		query = query.Where("received_at >= ?", req.StartTime)
+	}
+	if req.EndTime != "" {
+		query = query.Where("received_at <= ?", req.EndTime)
+	}
+
+	var totalLogs int64
+	query.Count(&totalLogs)
+	result.TotalLogs = totalLogs
+
+	if req.TopN <= 0 {
+		req.TopN = 10
+	}
+
+	type FieldCount struct {
+		Value    string `json:"value"`
+		Count    int64  `json:"count"`
+		LastSeen string `json:"lastSeen"`
+	}
+
+	var fieldCounts []FieldCount
+
+	fieldExpr := fmt.Sprintf("json_extract(parsed_data, '$.%s')", req.Field)
+
+	baseQuery := db.Model(&SyslogLog{}).
+		Where("parsed_data IS NOT NULL AND parsed_data != ''").
+		Where(fieldExpr+" IS NOT NULL").
+		Where(fieldExpr + " != ''")
+
+	if req.FilterPolicyID > 0 {
+		baseQuery = baseQuery.Where("matched_policy_id = ?", req.FilterPolicyID)
+	}
+	if req.StartTime != "" {
+		baseQuery = baseQuery.Where("received_at >= ?", req.StartTime)
+	}
+	if req.EndTime != "" {
+		baseQuery = baseQuery.Where("received_at <= ?", req.EndTime)
+	}
+
+	var fieldTotal int64
+	baseQuery.Count(&fieldTotal)
+
+	rows, err := baseQuery.
+		Select(
+			fieldExpr+" as value",
+			"COUNT(*) as count",
+			"MAX(received_at) as last_seen",
+		).
+		Group(fieldExpr).
+		Order("count DESC").
+		Limit(req.TopN).
+		Rows()
+
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var fc FieldCount
+			if err := rows.Scan(&fc.Value, &fc.Count, &fc.LastSeen); err == nil {
+				fieldCounts = append(fieldCounts, fc)
+			}
+		}
+	}
+
+	result.Items = make([]StatsItem, 0, len(fieldCounts))
+
+	var uniqueCount int64
+	countQuery := db.Model(&SyslogLog{}).
+		Where("parsed_data IS NOT NULL AND parsed_data != ''").
+		Where(fieldExpr+" IS NOT NULL").
+		Where(fieldExpr + " != ''")
+	if req.FilterPolicyID > 0 {
+		countQuery = countQuery.Where("matched_policy_id = ?", req.FilterPolicyID)
+	}
+	if req.StartTime != "" {
+		countQuery = countQuery.Where("received_at >= ?", req.StartTime)
+	}
+	if req.EndTime != "" {
+		countQuery = countQuery.Where("received_at <= ?", req.EndTime)
+	}
+	countQuery.Distinct(fieldExpr).Count(&uniqueCount)
+	result.UniqueCount = uniqueCount
+
+	for _, fc := range fieldCounts {
+		percent := "0%"
+		if fieldTotal > 0 {
+			p := float64(fc.Count) / float64(fieldTotal) * 100
+			percent = fmt.Sprintf("%.1f%%", p)
+		}
+
+		result.Items = append(result.Items, StatsItem{
+			Value:    fc.Value,
+			Location: "",
+			Count:    fc.Count,
+			Percent:  percent,
+			LastSeen: fc.LastSeen,
+		})
+	}
+
+	return result
+}
+
+func GetAvailableStatsFields(policyID uint) []StatsField {
+	if policyID == 0 {
+		return []StatsField{}
+	}
+
+	var policy FilterPolicy
+	if err := db.First(&policy, policyID).Error; err != nil {
+		return []StatsField{}
+	}
+
+	fieldMap := make(map[string]string)
+	hasSubTemplates := false
+
+	if policy.ParseTemplateID > 0 {
+		var parseTemplate ParseTemplate
+		if err := db.First(&parseTemplate, policy.ParseTemplateID).Error; err == nil {
+			if parseTemplate.ParseType == "smart_delimiter" && parseTemplate.FieldMapping != "" {
+				var fieldMappingData map[string]interface{}
+				if err := json.Unmarshal([]byte(parseTemplate.FieldMapping), &fieldMappingData); err == nil {
+					if subTemplatesRaw, ok := fieldMappingData["subTemplates"]; ok {
+						hasSubTemplates = true
+						if subTemplatesMap, ok := subTemplatesRaw.(map[string]interface{}); ok {
+							fieldKeyMap := map[string]string{
+								"alertNameField":    "alertName",
+								"attackIPField":     "attackIP",
+								"victimIPField":     "victimIP",
+								"alertTimeField":    "alertTime",
+								"severityField":     "severity",
+								"attackResultField": "attackResult",
+							}
+							displayNameMap := map[string]string{
+								"alertName":    "告警名称",
+								"attackIP":     "攻击IP",
+								"victimIP":     "受害IP",
+								"alertTime":    "告警时间",
+								"severity":     "威胁等级",
+								"attackResult": "攻击结果",
+							}
+							for _, subRaw := range subTemplatesMap {
+								if sub, ok := subRaw.(map[string]interface{}); ok {
+									for fieldKey, fieldName := range fieldKeyMap {
+										if _, exists := sub[fieldKey]; exists {
+											fieldMap[fieldName] = displayNameMap[fieldName]
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			} else if parseTemplate.FieldMapping != "" {
+				var simpleMapping map[string]string
+				if err := json.Unmarshal([]byte(parseTemplate.FieldMapping), &simpleMapping); err == nil {
+					for fieldName, displayName := range simpleMapping {
+						if fieldName != "" {
+							fieldMap[fieldName] = displayName
+						}
+					}
+				} else {
+					var complexMapping map[string]map[string]interface{}
+					if err := json.Unmarshal([]byte(parseTemplate.FieldMapping), &complexMapping); err == nil {
+						for targetField := range complexMapping {
+							if targetField != "" {
+								fieldMap[targetField] = targetField
+							}
+						}
+					}
+				}
+			}
+
+			if parseTemplate.SubTemplates != "" {
+				var subTemplates []SubTemplateConfig
+				if err := json.Unmarshal([]byte(parseTemplate.SubTemplates), &subTemplates); err == nil {
+					hasSubTemplates = true
+					displayNameMap := map[string]string{
+						"alertName":    "告警名称",
+						"attackIp":     "攻击IP",
+						"victimIp":     "受害IP",
+						"alertTime":    "告警时间",
+						"severity":     "威胁等级",
+						"attackResult": "攻击结果",
+					}
+					for _, st := range subTemplates {
+						if st.AlertNameField > 0 {
+							fieldMap["alertName"] = displayNameMap["alertName"]
+						}
+						if st.AttackIPField > 0 {
+							fieldMap["attackIp"] = displayNameMap["attackIp"]
+						}
+						if st.VictimIPField > 0 {
+							fieldMap["victimIp"] = displayNameMap["victimIp"]
+						}
+						if st.AlertTimeField > 0 {
+							fieldMap["alertTime"] = displayNameMap["alertTime"]
+						}
+						if st.SeverityField > 0 {
+							fieldMap["severity"] = displayNameMap["severity"]
+						}
+						if st.AttackResultField > 0 {
+							fieldMap["attackResult"] = displayNameMap["attackResult"]
+						}
+						for _, cf := range st.CustomFields {
+							if cf.Name != "" {
+								fieldMap[cf.Name] = cf.Name
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	var fields []StatsField
+
+	if hasSubTemplates {
+		fixedFields := []string{"alertName", "attackIP", "victimIP", "alertTime", "severity", "attackResult"}
+		for _, f := range fixedFields {
+			if displayName, ok := fieldMap[f]; ok {
+				fields = append(fields, StatsField{Name: f, DisplayName: displayName})
+			} else {
+				fields = append(fields, StatsField{Name: f, DisplayName: f})
+			}
+		}
+	} else {
+		for fieldName, displayName := range fieldMap {
+			fields = append(fields, StatsField{Name: fieldName, DisplayName: displayName})
+		}
+	}
+
+	return fields
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

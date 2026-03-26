@@ -7,6 +7,9 @@ import {
   UpdateFieldMappingDoc, 
   DeleteFieldMappingDoc 
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 interface FieldMappingItem {
   field: string
@@ -76,7 +79,11 @@ onMounted(() => {
 async function loadDocs() {
   loading.value = true
   try {
-    docs.value = await GetFieldMappingDocs()
+    if (isWeb) {
+      docs.value = await WebAPI.GetFieldMappingDocs()
+    } else {
+      docs.value = await GetFieldMappingDocs()
+    }
   } catch (e) {
     console.error(e)
   } finally {
@@ -105,7 +112,11 @@ function handleEdit(row: FieldMappingDoc) {
 async function handleDelete(row: FieldMappingDoc) {
   try {
     await ElMessageBox.confirm('确定要删除该映射文档吗？', '提示', { type: 'warning' })
-    await DeleteFieldMappingDoc(row.id!)
+    if (isWeb) {
+      await WebAPI.DeleteFieldMappingDoc(row.id!)
+    } else {
+      await DeleteFieldMappingDoc(row.id!)
+    }
     ElMessage.success('删除成功')
     loadDocs()
   } catch (e: any) {
@@ -246,10 +257,18 @@ async function handleSubmit() {
   
   try {
     if (isEdit.value) {
-      await UpdateFieldMappingDoc(formData.value)
+      if (isWeb) {
+        await WebAPI.UpdateFieldMappingDoc(formData.value)
+      } else {
+        await UpdateFieldMappingDoc(formData.value)
+      }
       ElMessage.success('更新成功')
     } else {
-      await AddFieldMappingDoc(formData.value)
+      if (isWeb) {
+        await WebAPI.AddFieldMappingDoc(formData.value)
+      } else {
+        await AddFieldMappingDoc(formData.value)
+      }
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false

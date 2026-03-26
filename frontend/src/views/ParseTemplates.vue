@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Right, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { Delete, Right, ArrowUp, ArrowDown, Upload, Download } from '@element-plus/icons-vue'
 import { 
   GetParseTemplates, 
   AddParseTemplate, 
@@ -10,8 +10,14 @@ import {
   TestParseTemplate,
   GetFieldMappingDocByDeviceType,
   GetFieldMappingDocs,
-  GetFieldMappingDocByName
+  GetFieldMappingDocByName,
+  ExportParseTemplates,
+  ImportParseTemplates,
+  SaveExportedFile
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 interface ParseTemplate {
   id?: number
@@ -61,6 +67,9 @@ const viewDialogVisible = ref(false)
 const isEdit = ref(false)
 const fieldMappingCache = ref<Record<string, string>>({})
 const deviceTypes = ref<{value: string, label: string}[]>([])
+const selectedTemplates = ref<ParseTemplate[]>([])
+const importDialogVisible = ref(false)
+const importJsonContent = ref('')
 
 const smartDelimiterConfig = ref<SmartDelimiterConfig>({
   delimiter: '|!',
@@ -215,7 +224,11 @@ watch(() => formData.value.deviceType, async (newVal) => {
 async function loadTemplates() {
   loading.value = true
   try {
-    templates.value = await GetParseTemplates()
+    if (isWeb) {
+      templates.value = await WebAPI.GetParseTemplates()
+    } else {
+      templates.value = await GetParseTemplates()
+    }
   } catch (e) {
     console.error(e)
   } finally {
@@ -239,6 +252,54 @@ function resetForm() {
   valueTransforms.value = []
   parseResult.value = null
   allDiscoveredFields.value = []
+}
+
+function handleSelectionChange(selection: ParseTemplate[]) {
+  selectedTemplates.value = selection
+}
+
+function showImportDialog() {
+  importJsonContent.value = ''
+  importDialogVisible.value = true
+}
+
+async function handleImport() {
+  if (!importJsonContent.value.trim()) {
+    ElMessage.warning('请输入JSON内容')
+    return
+  }
+  
+  try {
+    const result = await ImportParseTemplates(importJsonContent.value)
+    if (result.success) {
+      ElMessage.success(result.message)
+      importDialogVisible.value = false
+      loadTemplates()
+    } else {
+      ElMessage.error(result.message)
+    }
+  } catch (e: any) {
+    ElMessage.error('导入失败: ' + (e.message || '未知错误'))
+  }
+}
+
+async function handleExport() {
+  if (selectedTemplates.value.length === 0) {
+    ElMessage.warning('请先选择要导出的模板')
+    return
+  }
+  
+  const ids = selectedTemplates.value.map(t => t.id).filter(Boolean) as number[]
+  try {
+    const jsonContent = await ExportParseTemplates(ids)
+    const timestamp = new Date().toISOString().slice(0, 10)
+    const filename = `parse_templates_${timestamp}.json`
+    
+    const filePath = await SaveExportedFile(jsonContent, filename)
+    ElMessage.success(`已导出到: ${filePath}`)
+  } catch (e: any) {
+    ElMessage.error('导出失败: ' + (e.message || '未知错误'))
+  }
 }
 
 function handleAdd() {
@@ -354,7 +415,11 @@ function handleEdit(row: ParseTemplate) {
 async function handleDelete(row: ParseTemplate) {
   try {
     await ElMessageBox.confirm('确定要删除该解析模板吗？', '提示', { type: 'warning' })
-    await DeleteParseTemplate(row.id!)
+    if (isWeb) {
+      await WebAPI.DeleteParseTemplate(row.id!)
+    } else {
+      await DeleteParseTemplate(row.id!)
+    }
     ElMessage.success('删除成功')
     loadTemplates()
   } catch (e: any) {
@@ -675,10 +740,18 @@ async function handleSubmit() {
   
   try {
     if (formData.value.id) {
-      await UpdateParseTemplate(formData.value)
+      if (isWeb) {
+        await WebAPI.UpdateParseTemplate(formData.value)
+      } else {
+        await UpdateParseTemplate(formData.value)
+      }
       ElMessage.success('更新成功')
     } else {
-      await AddParseTemplate(formData.value)
+      if (isWeb) {
+        await WebAPI.AddParseTemplate(formData.value)
+      } else {
+        await AddParseTemplate(formData.value)
+      }
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false
@@ -750,14 +823,25 @@ function applyPresetTemplate(value: string) {
       <template #header>
         <div class="card-header">
           <span>解析模板</span>
-          <el-button type="primary" @click="handleAdd">
-            <el-icon><Plus /></el-icon>
-            添加模板
-          </el-button>
+          <div class="header-actions">
+            <el-button @click="showImportDialog">
+              <el-icon><Upload /></el-icon>
+              导入模板
+            </el-button>
+            <el-button @click="handleExport" :disabled="selectedTemplates.length === 0">
+              <el-icon><Download /></el-icon>
+              导出模板
+            </el-button>
+            <el-button type="primary" @click="handleAdd">
+              <el-icon><Plus /></el-icon>
+              添加模板
+            </el-button>
+          </div>
         </div>
       </template>
       
-      <el-table :data="templates" v-loading="loading" stripe>
+      <el-table :data="templates" v-loading="loading" stripe @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" />
         <el-table-column type="index" label="序号" width="60" />
         <el-table-column prop="name" label="模板名称" width="180" />
         <el-table-column prop="parseType" label="解析类型" width="120">
@@ -1613,6 +1697,28 @@ function applyPresetTemplate(value: string) {
         </div>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="importDialogVisible" title="导入解析模板" width="600px">
+      <el-form label-width="80px">
+        <el-form-item label="JSON内容">
+          <el-input
+            v-model="importJsonContent"
+            type="textarea"
+            :rows="10"
+            placeholder="粘贴JSON格式的解析模板配置..."
+          />
+        </el-form-item>
+        <el-form-item label="导入目录">
+          <el-text type="info" size="small">
+            也可将JSON文件放入程序根目录下的 templates/ 目录
+          </el-text>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleImport">导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1622,6 +1728,11 @@ function applyPresetTemplate(value: string) {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    
+    .header-actions {
+      display: flex;
+      gap: 10px;
+    }
   }
 }
 

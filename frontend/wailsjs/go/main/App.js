@@ -6,6 +6,10 @@ export function AddAlertPolicy(arg1) {
   return window['go']['main']['App']['AddAlertPolicy'](arg1);
 }
 
+export function AddAlertRule(arg1) {
+  return window['go']['main']['App']['AddAlertRule'](arg1);
+}
+
 export function AddDevice(arg1) {
   return window['go']['main']['App']['AddDevice'](arg1);
 }
@@ -38,6 +42,10 @@ export function AddTemplate(arg1) {
   return window['go']['main']['App']['AddTemplate'](arg1);
 }
 
+export function CleanupAllLogs() {
+  return window['go']['main']['App']['CleanupAllLogs']();
+}
+
 export function CleanupLogs(arg1) {
   return window['go']['main']['App']['CleanupLogs'](arg1);
 }
@@ -48,6 +56,14 @@ export function CleanupUnmatchedLogs(arg1) {
 
 export function DeleteAlertPolicy(arg1) {
   return window['go']['main']['App']['DeleteAlertPolicy'](arg1);
+}
+
+export function DeleteAlertRule(arg1) {
+  return window['go']['main']['App']['DeleteAlertRule'](arg1);
+}
+
+export function DeleteAlertRulesByRobotID(arg1) {
+  return window['go']['main']['App']['DeleteAlertRulesByRobotID'](arg1);
 }
 
 export function DeleteDevice(arg1) {
@@ -82,6 +98,14 @@ export function DeleteTemplate(arg1) {
   return window['go']['main']['App']['DeleteTemplate'](arg1);
 }
 
+export function ExportFilterPolicies(arg1) {
+  return window['go']['main']['App']['ExportFilterPolicies'](arg1);
+}
+
+export function ExportParseTemplates(arg1) {
+  return window['go']['main']['App']['ExportParseTemplates'](arg1);
+}
+
 export function ExportTemplates(arg1) {
   return window['go']['main']['App']['ExportTemplates'](arg1);
 }
@@ -102,8 +126,20 @@ export function GetAlertRecords(arg1, arg2) {
   return window['go']['main']['App']['GetAlertRecords'](arg1, arg2);
 }
 
+export function GetAlertRule(arg1) {
+  return window['go']['main']['App']['GetAlertRule'](arg1);
+}
+
+export function GetAlertRules(arg1) {
+  return window['go']['main']['App']['GetAlertRules'](arg1);
+}
+
 export function GetAppVersion() {
   return window['go']['main']['App']['GetAppVersion']();
+}
+
+export function GetAvailableStatsFields(arg1) {
+  return window['go']['main']['App']['GetAvailableStatsFields'](arg1);
 }
 
 export function GetConfig() {
@@ -146,6 +182,10 @@ export function GetFieldMappingDocs() {
   return window['go']['main']['App']['GetFieldMappingDocs']();
 }
 
+export function GetFieldStats(arg1) {
+  return window['go']['main']['App']['GetFieldStats'](arg1);
+}
+
 export function GetFilterPolicies() {
   return window['go']['main']['App']['GetFilterPolicies']();
 }
@@ -154,12 +194,20 @@ export function GetFilterPolicy(arg1) {
   return window['go']['main']['App']['GetFilterPolicy'](arg1);
 }
 
+export function GetImportDirectory() {
+  return window['go']['main']['App']['GetImportDirectory']();
+}
+
 export function GetLocalIP() {
   return window['go']['main']['App']['GetLocalIP']();
 }
 
 export function GetLocalIPs() {
   return window['go']['main']['App']['GetLocalIPs']();
+}
+
+export function GetLogTraceInfo(arg1) {
+  return window['go']['main']['App']['GetLogTraceInfo'](arg1);
 }
 
 export function GetLogs(arg1) {
@@ -198,6 +246,10 @@ export function GetRobots() {
   return window['go']['main']['App']['GetRobots']();
 }
 
+export function GetServiceStatus() {
+  return window['go']['main']['App']['GetServiceStatus']();
+}
+
 export function GetSystemStats() {
   return window['go']['main']['App']['GetSystemStats']();
 }
@@ -214,12 +266,32 @@ export function GetUnmatchedLogsCount() {
   return window['go']['main']['App']['GetUnmatchedLogsCount']();
 }
 
+export function ImportFilterPolicies(arg1) {
+  return window['go']['main']['App']['ImportFilterPolicies'](arg1);
+}
+
+export function ImportParseTemplates(arg1) {
+  return window['go']['main']['App']['ImportParseTemplates'](arg1);
+}
+
 export function ImportTemplates(arg1) {
   return window['go']['main']['App']['ImportTemplates'](arg1);
 }
 
+export function ReadImportFile(arg1) {
+  return window['go']['main']['App']['ReadImportFile'](arg1);
+}
+
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
+}
+
+export function SaveExportedFile(arg1, arg2) {
+  return window['go']['main']['App']['SaveExportedFile'](arg1, arg2);
+}
+
+export function ScanImportFiles() {
+  return window['go']['main']['App']['ScanImportFiles']();
 }
 
 export function SendTestSyslog(arg1) {
@@ -238,6 +310,14 @@ export function TestDingTalkWebhook(arg1, arg2) {
   return window['go']['main']['App']['TestDingTalkWebhook'](arg1, arg2);
 }
 
+export function TestEmail(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['TestEmail'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function TestFeishuWebhook(arg1, arg2) {
+  return window['go']['main']['App']['TestFeishuWebhook'](arg1, arg2);
+}
+
 export function TestParseTemplate(arg1) {
   return window['go']['main']['App']['TestParseTemplate'](arg1);
 }
@@ -246,8 +326,20 @@ export function TestRegex(arg1, arg2) {
   return window['go']['main']['App']['TestRegex'](arg1, arg2);
 }
 
+export function TestSyslogForward(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['TestSyslogForward'](arg1, arg2, arg3, arg4);
+}
+
+export function TestWeworkWebhook(arg1, arg2) {
+  return window['go']['main']['App']['TestWeworkWebhook'](arg1, arg2);
+}
+
 export function UpdateAlertPolicy(arg1) {
   return window['go']['main']['App']['UpdateAlertPolicy'](arg1);
+}
+
+export function UpdateAlertRule(arg1) {
+  return window['go']['main']['App']['UpdateAlertRule'](arg1);
 }
 
 export function UpdateDevice(arg1) {

@@ -1,3 +1,6 @@
+//go:build !web
+// +build !web
+
 package main
 
 import (
@@ -18,7 +21,7 @@ func main() {
 	app := NewApp()
 
 	appOptions := &options.App{
-		Title:  "Syslog2Bot v1.3.2 — By 迷人安全",
+		Title:  "Syslog2Bot v1.5.0 — By 迷人安全",
 		Width:  1280,
 		Height: 800,
 		AssetServer: &assetserver.Options{

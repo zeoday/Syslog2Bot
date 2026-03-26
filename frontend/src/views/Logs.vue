@@ -6,6 +6,9 @@ import {
   GetLogs, 
   GetDevices 
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 interface LogItem {
   id: number
@@ -45,7 +48,11 @@ onMounted(async () => {
 
 async function loadDevices() {
   try {
-    devices.value = await GetDevices()
+    if (isWeb) {
+      devices.value = await WebAPI.GetDevices()
+    } else {
+      devices.value = await GetDevices()
+    }
   } catch (e) {
     console.error(e)
   }
@@ -54,10 +61,18 @@ async function loadDevices() {
 async function loadLogs() {
   loading.value = true
   try {
-    const result = await GetLogs({
-      ...queryParams,
-      deviceId: queryParams.deviceId || 0
-    })
+    let result
+    if (isWeb) {
+      result = await WebAPI.GetLogs({
+        ...queryParams,
+        deviceId: queryParams.deviceId || 0
+      })
+    } else {
+      result = await GetLogs({
+        ...queryParams,
+        deviceId: queryParams.deviceId || 0
+      })
+    }
     logs.value = result.logs || []
     total.value = result.total || 0
   } catch (e) {

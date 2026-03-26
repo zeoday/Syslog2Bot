@@ -4,6 +4,8 @@ import {main} from '../models';
 
 export function AddAlertPolicy(arg1:main.AlertPolicy):Promise<void>;
 
+export function AddAlertRule(arg1:main.AlertRule):Promise<void>;
+
 export function AddDevice(arg1:main.Device):Promise<void>;
 
 export function AddDeviceGroup(arg1:main.DeviceGroup):Promise<void>;
@@ -16,15 +18,21 @@ export function AddOutputTemplate(arg1:main.OutputTemplate):Promise<void>;
 
 export function AddParseTemplate(arg1:main.ParseTemplate):Promise<void>;
 
-export function AddRobot(arg1:main.DingTalkRobot):Promise<void>;
+export function AddRobot(arg1:main.DingTalkRobot):Promise<main.DingTalkRobot>;
 
 export function AddTemplate(arg1:main.Template):Promise<void>;
+
+export function CleanupAllLogs():Promise<void>;
 
 export function CleanupLogs(arg1:number):Promise<void>;
 
 export function CleanupUnmatchedLogs(arg1:number):Promise<void>;
 
 export function DeleteAlertPolicy(arg1:number):Promise<void>;
+
+export function DeleteAlertRule(arg1:number):Promise<void>;
+
+export function DeleteAlertRulesByRobotID(arg1:number):Promise<void>;
 
 export function DeleteDevice(arg1:number):Promise<void>;
 
@@ -42,6 +50,10 @@ export function DeleteRobot(arg1:number):Promise<void>;
 
 export function DeleteTemplate(arg1:number):Promise<void>;
 
+export function ExportFilterPolicies(arg1:Array<number>):Promise<string>;
+
+export function ExportParseTemplates(arg1:Array<number>):Promise<string>;
+
 export function ExportTemplates(arg1:Array<number>):Promise<Array<main.Template>>;
 
 export function FormatSyslogMessage(arg1:string):Promise<Record<string, string>>;
@@ -52,7 +64,13 @@ export function GetAlertPolicy(arg1:number):Promise<main.AlertPolicy>;
 
 export function GetAlertRecords(arg1:number,arg2:number):Promise<Array<main.AlertRecord>|number>;
 
+export function GetAlertRule(arg1:number):Promise<main.AlertRule>;
+
+export function GetAlertRules(arg1:number):Promise<Array<main.AlertRule>>;
+
 export function GetAppVersion():Promise<string>;
+
+export function GetAvailableStatsFields(arg1:number):Promise<Array<main.StatsField>>;
 
 export function GetConfig():Promise<main.SystemConfig>;
 
@@ -74,13 +92,19 @@ export function GetFieldMappingDocByName(arg1:string):Promise<main.FieldMappingD
 
 export function GetFieldMappingDocs():Promise<Array<main.FieldMappingDoc>>;
 
+export function GetFieldStats(arg1:main.FieldStatsRequest):Promise<main.FieldStatsResult>;
+
 export function GetFilterPolicies():Promise<Array<main.FilterPolicy>>;
 
 export function GetFilterPolicy(arg1:number):Promise<main.FilterPolicy>;
 
+export function GetImportDirectory():Promise<string>;
+
 export function GetLocalIP():Promise<string>;
 
 export function GetLocalIPs():Promise<Array<string>>;
+
+export function GetLogTraceInfo(arg1:number):Promise<main.LogTraceInfo>;
 
 export function GetLogs(arg1:main.LogQueryParams):Promise<main.LogQueryResult>;
 
@@ -100,6 +124,8 @@ export function GetRobot(arg1:number):Promise<main.DingTalkRobot>;
 
 export function GetRobots():Promise<Array<main.DingTalkRobot>>;
 
+export function GetServiceStatus():Promise<Record<string, any>>;
+
 export function GetSystemStats():Promise<main.SystemStats>;
 
 export function GetTemplate(arg1:number):Promise<main.Template>;
@@ -108,9 +134,19 @@ export function GetTemplates():Promise<Array<main.Template>>;
 
 export function GetUnmatchedLogsCount():Promise<number>;
 
+export function ImportFilterPolicies(arg1:string):Promise<main.ImportResult>;
+
+export function ImportParseTemplates(arg1:string):Promise<main.ImportResult>;
+
 export function ImportTemplates(arg1:Array<main.Template>):Promise<void>;
 
+export function ReadImportFile(arg1:string):Promise<string>;
+
 export function SaveConfig(arg1:main.SystemConfig):Promise<void>;
+
+export function SaveExportedFile(arg1:string,arg2:string):Promise<string>;
+
+export function ScanImportFiles():Promise<Array<string>>;
 
 export function SendTestSyslog(arg1:main.TestSyslogRequest):Promise<main.TestSyslogResult>;
 
@@ -120,11 +156,21 @@ export function StopSyslogService():Promise<void>;
 
 export function TestDingTalkWebhook(arg1:string,arg2:string):Promise<string>;
 
+export function TestEmail(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
+
+export function TestFeishuWebhook(arg1:string,arg2:string):Promise<string>;
+
 export function TestParseTemplate(arg1:main.ParseTestRequest):Promise<main.ParseTestResult>;
 
 export function TestRegex(arg1:string,arg2:string):Promise<Record<string, any>>;
 
+export function TestSyslogForward(arg1:string,arg2:number,arg3:string,arg4:string):Promise<string>;
+
+export function TestWeworkWebhook(arg1:string,arg2:string):Promise<string>;
+
 export function UpdateAlertPolicy(arg1:main.AlertPolicy):Promise<void>;
+
+export function UpdateAlertRule(arg1:main.AlertRule):Promise<void>;
 
 export function UpdateDevice(arg1:main.Device):Promise<void>;
 

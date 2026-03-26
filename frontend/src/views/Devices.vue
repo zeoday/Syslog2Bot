@@ -7,6 +7,9 @@ import {
   UpdateDevice, 
   DeleteDevice
 } from '../../wailsjs/go/main/App'
+import { WebAPI } from '../api/web'
+
+const isWeb = typeof window !== 'undefined' && !(window as any).go
 
 interface Device {
   id?: number
@@ -36,7 +39,11 @@ onMounted(() => {
 async function loadDevices() {
   loading.value = true
   try {
-    devices.value = await GetDevices()
+    if (isWeb) {
+      devices.value = await WebAPI.GetDevices()
+    } else {
+      devices.value = await GetDevices()
+    }
   } catch (e) {
     console.error(e)
   } finally {
@@ -67,7 +74,11 @@ async function handleDelete(row: Device) {
     await ElMessageBox.confirm('确定要删除该设备吗？', '提示', {
       type: 'warning'
     })
-    await DeleteDevice(row.id!)
+    if (isWeb) {
+      await WebAPI.DeleteDevice(row.id!)
+    } else {
+      await DeleteDevice(row.id!)
+    }
     ElMessage.success('删除成功')
     loadDevices()
   } catch (e: any) {
@@ -85,10 +96,18 @@ async function handleSubmit() {
   
   try {
     if (formData.value.id) {
-      await UpdateDevice(formData.value)
+      if (isWeb) {
+        await WebAPI.UpdateDevice(formData.value)
+      } else {
+        await UpdateDevice(formData.value)
+      }
       ElMessage.success('更新成功')
     } else {
-      await AddDevice(formData.value)
+      if (isWeb) {
+        await WebAPI.AddDevice(formData.value)
+      } else {
+        await AddDevice(formData.value)
+      }
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false

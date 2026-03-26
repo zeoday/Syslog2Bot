@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) startLogCleanupTask() {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -72,19 +73,34 @@ func (a *App) cleanupLogsIfNeeded() {
 	var logCount int64
 	db.Model(&SyslogLog{}).Count(&logCount)
 
-	if logCount > 100000 {
-		cutoff := time.Now().AddDate(0, 0, -config.LogRetention)
-		db.Where("received_at < ?", cutoff).Delete(&SyslogLog{})
-		db.Exec("VACUUM")
+	retentionDays := config.LogRetention
+	if retentionDays <= 0 {
+		retentionDays = 7
+	}
+
+	if logCount > 10000 {
+		cutoff := time.Now().AddDate(0, 0, -retentionDays)
+		result := db.Where("received_at < ?", cutoff).Delete(&SyslogLog{})
+		if result.RowsAffected > 0 {
+			log.Printf("[CLEANUP] Deleted %d old logs (older than %d days)\n", result.RowsAffected, retentionDays)
+			db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+			db.Exec("VACUUM")
+		}
 	}
 
 	var alertCount int64
 	db.Model(&AlertRecord{}).Count(&alertCount)
 
-	if alertCount > 50000 {
+	if alertCount > 10000 {
 		cutoff := time.Now().AddDate(0, 0, -7)
-		db.Where("created_at < ?", cutoff).Delete(&AlertRecord{})
-		db.Exec("VACUUM")
+		result := db.Where("created_at < ?", cutoff).Delete(&AlertRecord{})
+		if result.RowsAffected > 0 {
+			log.Printf("[CLEANUP] Deleted %d old alert records\n", result.RowsAffected)
+		}
+	}
+
+	if logCount > 50000 {
+		db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
 	}
 }
 
@@ -134,13 +150,68 @@ func (a *App) StopSyslogService() error {
 }
 
 func (a *App) GetLocalIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+	interfaces, err := net.Interfaces()
 	if err != nil {
 		return "127.0.0.1"
 	}
-	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
+	
+	var physicalIP string
+	var otherIP string
+	
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		
+		name := strings.ToLower(iface.Name)
+		isVirtual := strings.Contains(name, "vnic") || 
+			strings.Contains(name, "vmnet") || 
+			strings.Contains(name, "bridge") ||
+			strings.Contains(name, "veth") ||
+			strings.Contains(name, "docker") ||
+			strings.Contains(name, "vEthernet") ||
+			strings.Contains(name, "parallels") ||
+			strings.HasPrefix(name, "utun") ||
+			strings.HasPrefix(name, "awdl") ||
+			strings.HasPrefix(name, "llw") ||
+			strings.HasPrefix(name, "anpi") ||
+			strings.HasPrefix(name, "vnic") ||
+			strings.HasPrefix(name, "vmnet")
+		
+		isPhysical := strings.HasPrefix(name, "en") || 
+			strings.HasPrefix(name, "eth") || 
+			strings.HasPrefix(name, "wlan") ||
+			strings.HasPrefix(name, "wi-fi")
+		
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ipnet.IP.To4() != nil {
+					ip := ipnet.IP.String()
+					if isPhysical && !isVirtual {
+						if physicalIP == "" {
+							physicalIP = ip
+						}
+					} else if !isVirtual && otherIP == "" {
+						otherIP = ip
+					}
+				}
+			}
+		}
+	}
+	
+	if physicalIP != "" {
+		return physicalIP
+	}
+	if otherIP != "" {
+		return otherIP
+	}
+	
+	return "127.0.0.1"
 }
 
 func (a *App) FormatSyslogMessage(msg string) map[string]string {
@@ -163,6 +234,26 @@ func (a *App) FormatSyslogMessage(msg string) map[string]string {
 
 func (a *App) TestDingTalkWebhook(webhookURL, secret string) (string, error) {
 	return SendDingTalkTestMessage(webhookURL, secret)
+}
+
+func (a *App) TestFeishuWebhook(webhookURL, secret string) (string, error) {
+	return SendFeishuTestMessage(webhookURL, secret)
+}
+
+func (a *App) TestWeworkWebhook(webhookURL, key string) (string, error) {
+	return SendWeworkTestMessage(webhookURL, key)
+}
+
+func (a *App) TestEmail(host string, port int, username, password, from, to string) (string, error) {
+	return SendEmailTestMessage(host, port, username, password, from, to)
+}
+
+func (a *App) TestSyslogForward(host string, port int, protocol string, format string) (string, error) {
+	err := TestSyslogForward(host, port, protocol, format)
+	if err != nil {
+		return "", err
+	}
+	return "测试消息发送成功！", nil
 }
 
 func (a *App) GetAppVersion() string {
